@@ -1,0 +1,9 @@
+.env
+*.pem
+*.key
+ansible/vault_pass.txt
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
