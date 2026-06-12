@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -14,5 +15,15 @@ class ScanResponse(BaseModel):
     scan_type: str
     status: str
     scanned_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LatestScanResponse(BaseModel):
+    scan_id: str
+    scan_date: datetime
+    detected_patches_count: int
+    status: str
+    execution_log: Any
 
     model_config = ConfigDict(from_attributes=True)
