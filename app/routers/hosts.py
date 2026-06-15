@@ -13,6 +13,7 @@ from app.schemas.host import (
     HostSoftwareResponse,
     PatchOnHost,
     SoftwareItem,
+    HardwareInfoResponse,
 )
 
 router = APIRouter(prefix="/api/hosts", tags=["hosts"])
@@ -113,9 +114,14 @@ def get_host_software(host_id: str, db: Session = Depends(get_db)):
         .all()
     )
 
+    hardware_info = None
+    if host.hardware_info:
+        hardware_info = HardwareInfoResponse.model_validate(host.hardware_info)
+
     return HostSoftwareResponse(
         host_id=str(host.id),
         hostname=host.hostname,
+        hardware=hardware_info,
         software=[
             SoftwareItem(
                 id=str(s.id),
@@ -135,6 +141,7 @@ def get_host_software(host_id: str, db: Session = Depends(get_db)):
                 severity=d.patch.severity,
                 status=d.status.value,
                 scheduled_at=d.scheduled_at,
+                cve_references=d.patch.cve_references,
             )
             for d in deployments
         ],
