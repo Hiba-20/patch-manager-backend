@@ -1,0 +1,78 @@
+---
+- name: Collect inventory from Linux hosts
+  hosts: linux
+  gather_facts: yes
+  tasks:
+
+    - name: Get installed packages (dpkg)
+      shell: dpkg-query -W -f='${Package}|${Version}|${Architecture}\n'
+      register: pkg_list
+      changed_when: false
+
+    - name: Get disk usage
+      shell: df -BG / | tail -1 | awk '{print $2, $3, $5}'
+      register: disk_info
+      changed_when: false
+
+    - name: Set inventory facts
+      set_fact:
+        inventory_data:
+          hostname: "{{ ansible_hostname }}"
+          ip_address: "{{ ansible_host }}"
+          os_type: "linux"
+          os_version: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
+          os_architecture: "{{ ansible_architecture }}"
+          cpu_model: "{{ ansible_processor[2] | default('unknown') }}"
+          cpu_cores: "{{ ansible_processor_vcpus }}"
+          ram_total_gb: "{{ (ansible_memtotal_mb / 1024) | round(2) }}"
+          ram_used_percent: "{{ (100 - (ansible_memfree_mb / ansible_memtotal_mb * 100)) | round(1) }}"
+          disk_info: "{{ disk_info.stdout }}"
+          packages: "{{ pkg_list.stdout_lines }}"
+
+    - name: Return inventory data
+      debug:
+        var: inventory_data
+
+
+- name: Collect inventory from Windows hosts
+  hosts: windows
+  gather_facts: yes
+  tasks:
+
+    - name: Get installed software
+      win_shell: |
+        Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* |
+        Select-Object DisplayName, DisplayVersion, Publisher |
+        Where-Object { $_.DisplayName -ne $null } |
+        ConvertTo-Json -Compress
+      register: win_software
+      changed_when: false
+
+    - name: Get disk usage
+      win_shell: |
+        $disk = Get-PSDrive C
+        [PSCustomObject]@{
+          total_gb = [math]::Round(($disk.Used + $disk.Free) / 1GB, 2)
+          used_gb  = [math]::Round($disk.Used / 1GB, 2)
+        } | ConvertTo-Json -Compress
+      register: win_disk
+      changed_when: false
+
+    - name: Set inventory facts
+      set_fact:
+        inventory_data:
+          hostname: "{{ ansible_hostname }}"
+          ip_address: "{{ ansible_host }}"
+          os_type: "windows"
+          os_version: "{{ ansible_os_name }}"
+          os_architecture: "{{ ansible_architecture }}"
+          cpu_model: "{{ ansible_processor[0] | default('unknown') }}"
+          cpu_cores: "{{ ansible_processor_count }}"
+          ram_total_gb: "{{ (ansible_memtotal_mb / 1024) | round(2) }}"
+          ram_used_percent: "{{ (100 - (ansible_memfree_mb / ansible_memtotal_mb * 100)) | round(1) }}"
+          disk_info: "{{ win_disk.stdout }}"
+          packages: "{{ win_software.stdout }}"
+
+    - name: Return inventory data
+      debug:
+        var: inventory_data
