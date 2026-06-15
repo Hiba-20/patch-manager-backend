@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.models import Host, OSType, ScanResult, ScanStatus
-from app.schemas.scan import ScanRequest, ScanResponse
+from app.schemas.scan import LatestScanResponse, ScanRequest, ScanResponse
 from app.services.ansible_service import run_inventory_playbook
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
@@ -69,3 +69,41 @@ def create_scan(scan_in: ScanRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(scan)
     return _to_scan_response(scan, scan_in.scan_type)
+
+
+@router.get("/hosts/{host_id}/latest", response_model=LatestScanResponse)
+def get_latest_scan(host_id: str, db: Session = Depends(get_db)):
+    try:
+        host_uuid = uuid.UUID(host_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid host_id format",
+        ) from exc
+
+    host = db.query(Host).filter(Host.id == host_uuid).first()
+    if not host:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Host '{host_id}' not found",
+        )
+
+    scan = (
+        db.query(ScanResult)
+        .filter(ScanResult.host_id == host_uuid)
+        .order_by(ScanResult.started_at.desc())
+        .first()
+    )
+    if not scan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No scans found for host '{host_id}'",
+        )
+
+    return LatestScanResponse(
+        scan_id=str(scan.id),
+        scan_date=scan.started_at,
+        detected_patches_count=len(scan.software),
+        status=scan.status.value.lower(),
+        execution_log=scan.raw_output,
+    )

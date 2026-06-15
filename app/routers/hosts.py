@@ -6,8 +6,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.models import Host, OSType
-from app.schemas.host import HostCreate, HostResponse
+from app.models.models import Host, OSType, PatchDeployment, Software
+from app.schemas.host import (
+    HostCreate,
+    HostResponse,
+    HostSoftwareResponse,
+    PatchOnHost,
+    SoftwareItem,
+)
 
 router = APIRouter(prefix="/api/hosts", tags=["hosts"])
 
@@ -81,3 +87,55 @@ def get_host(host_id: str, db: Session = Depends(get_db)):
             detail=f"Host '{host_id}' not found",
         )
     return _to_host_response(host)
+
+
+@router.get("/{host_id}/software", response_model=HostSoftwareResponse)
+def get_host_software(host_id: str, db: Session = Depends(get_db)):
+    try:
+        host_uuid = uuid.UUID(host_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid host_id format",
+        ) from exc
+
+    host = db.query(Host).filter(Host.id == host_uuid).first()
+    if not host:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Host '{host_id}' not found",
+        )
+
+    software = db.query(Software).filter(Software.host_id == host_uuid).all()
+    deployments = (
+        db.query(PatchDeployment)
+        .filter(PatchDeployment.host_id == host_uuid)
+        .all()
+    )
+
+    return HostSoftwareResponse(
+        host_id=str(host.id),
+        hostname=host.hostname,
+        software=[
+            SoftwareItem(
+                id=str(s.id),
+                name=s.name,
+                version=s.version,
+                vendor=s.vendor,
+                install_date=s.install_date,
+                package_manager=s.package_manager,
+            )
+            for s in software
+        ],
+        patches=[
+            PatchOnHost(
+                patch_id=str(d.patch.id),
+                patch_name=d.patch.name,
+                patch_version=d.patch.version,
+                severity=d.patch.severity,
+                status=d.status.value,
+                scheduled_at=d.scheduled_at,
+            )
+            for d in deployments
+        ],
+    )
