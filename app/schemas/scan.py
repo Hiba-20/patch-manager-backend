@@ -19,6 +19,18 @@ class ScanResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ScanListResponse(BaseModel):
+    id: str
+    host_id: str
+    hostname: str = ""
+    scan_type: str = "inventory"
+    status: str
+    started_at: datetime | None
+    finished_at: datetime | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class LatestScanResponse(BaseModel):
     scan_id: str
     scan_date: datetime
