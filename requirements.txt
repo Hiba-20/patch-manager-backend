@@ -99,6 +99,7 @@ docstring-to-markdown @ file:///Users/builder/cbouss/perseverance-python-buildou
 docutils @ file:///Users/builder/cbouss/perseverance-python-buildout/croot/docutils_1699240610068/work
 et-xmlfile @ file:///Users/builder/cbouss/perseverance-python-buildout/croot/et_xmlfile_1699253278402/work
 executing @ file:///opt/conda/conda-bld/executing_1646925071911/work
+apscheduler>=3.10.4
 fastapi==0.136.3
 fastjsonschema @ file:///Users/builder/cbouss/perseverance-python-buildout/croot/python-fastjsonschema_1699241084188/work
 filelock @ file:///Users/builder/cbouss/perseverance-python-buildout/croot/filelock_1701807880662/work

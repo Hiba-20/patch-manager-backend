@@ -84,6 +84,8 @@ class Host(Base):
     is_active = Column(Boolean, default=True)
     last_seen = Column(DateTime)
     registered_at = Column(DateTime, default=datetime.utcnow)
+    cached_scan_result = Column(JSON, nullable=True)
+    cached_scan_at = Column(DateTime, nullable=True)
 
     # Relationships
     groups = relationship("Group", secondary=group_host_association, back_populates="hosts")
@@ -141,6 +143,7 @@ class PatchDeployment(Base):
     finished_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
     ansible_job_id = Column(UUID(as_uuid=True), ForeignKey("ansible_jobs.id"), nullable=True)
+    reboot_required = Column(Boolean, default=False)
     logs = Column(Text)
 
     # Relationships

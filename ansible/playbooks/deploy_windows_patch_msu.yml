@@ -1,0 +1,115 @@
+---
+- name: Deploy a Windows patch via pre-staged MSU
+  hosts: windows
+  gather_facts: yes
+  vars:
+    kb_id: ""
+    msu_index: "{{ lookup('file', playbook_dir ~ '/msu_index.json') | from_json }}"
+    msu_file: "{{ msu_index[kb_id] | default('') }}"
+  tasks:
+    - name: Validate kb_id is in MSU index
+      assert:
+        that:
+          - msu_file | length > 0
+        fail_msg: "No MSU file mapped for {{ kb_id }} in msu_index.json"
+
+    - name: Display deployment target
+      debug:
+        msg: "Installing {{ kb_id }} ({{ msu_file }}) on {{ ansible_hostname }}"
+
+    - name: Get local MSU file size
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/msu/{{ msu_file }}"
+      delegate_to: localhost
+      register: msu_stat
+
+    - name: Check remote disk space
+      ansible.windows.win_shell: |
+        $needed = [long]{{ msu_stat.stat.size }} + 1073741824
+        $free = (Get-PSDrive C).Free
+        if ($free -lt $needed) {
+          throw "Insufficient disk space: $([math]::Round($free/1GB,2)) GB free, need $([math]::Round($needed/1GB,2)) GB"
+        }
+        Write-Output "Disk space OK: $([math]::Round($free/1GB,2)) GB free"
+
+    - name: Copy MSU to VM
+      ansible.windows.win_copy:
+        src: "{{ playbook_dir }}/msu/{{ msu_file }}"
+        dest: "C:\\Windows\\Temp\\{{ msu_file }}"
+
+    - name: Extract MSU and install via DISM
+      ansible.windows.win_shell: |
+        $msu = "C:\Windows\Temp\{{ msu_file }}"
+        $extractDir = "C:\Windows\Temp\msu_extract_{{ msu_file | replace('.msu','') }}"
+        Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+
+        $expand = Start-Process expand.exe -ArgumentList "-F:*", "`"$msu`"", "`"$extractDir`"" -Wait -PassThru -NoNewWindow
+        if ($expand.ExitCode -ne 0) { throw "expand failed with code $($expand.ExitCode)" }
+
+        $cab = Get-ChildItem $extractDir -Filter *.cab | Sort-Object Length -Descending | Select-Object -First 1
+        if (-not $cab) { throw "No cab found in extracted MSU" }
+
+        $dism = Start-Process dism.exe -ArgumentList "/Online", "/Add-Package", "/PackagePath:`"$($cab.FullName)`"", "/Quiet", "/NoRestart" -Wait -PassThru
+        $code = $dism.ExitCode
+
+        Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
+
+        Write-Output "DISM_EXIT_CODE=$code"
+        if ($code -eq 0) {
+          Write-Output "RESULT:installed=true reboot_required=false"
+        } elseif ($code -eq 3010) {
+          Write-Output "RESULT:installed=true reboot_required=true"
+        } else {
+          Write-Output "RESULT:installed=false reboot_required=false"
+          Write-Output "DISM_ERROR:DISM failed with exit code $code"
+        }
+      register: install_result
+
+    - name: Fail if DISM had an unexpected error
+      ansible.builtin.fail:
+        msg: "{{ install_result.stdout_lines | select('match','DISM_ERROR:') | first | default('DISM failed') }}"
+      when: "'DISM_ERROR:' in install_result.stdout"
+
+    - name: Parse install result
+      set_fact:
+        deploy_result:
+          hostname: "{{ ansible_hostname }}"
+          kb_id: "{{ kb_id }}"
+          msu_file: "{{ msu_file }}"
+          installed: "{{ 'installed=true' in install_result.stdout }}"
+          reboot_required: "{{ 'reboot_required=true' in install_result.stdout }}"
+          dism_exit_code: "{{
+            ((install_result.stdout_lines | select('match','^DISM_EXIT_CODE=') | first | default('DISM_EXIT_CODE=-1')).split('=')[1] | int)
+          }}"
+          details: "{{ install_result.stdout_lines | select('match','RESULT:') | first | default('DISM execution completed') }}"
+
+    - name: Verify install via Get-HotFix
+      ansible.windows.win_shell: |
+        $kb = "{{ kb_id | regex_replace('^KB', '') }}"
+        $hf = Get-HotFix -Id "KB$kb" -ErrorAction SilentlyContinue
+        if (-not $hf) {
+          Write-Output "VERIFY:not_found"
+        } else {
+          Write-Output "VERIFY:found installed_on=$($hf.InstalledOn)"
+        }
+      register: verify_result
+      when: deploy_result.installed
+      ignore_errors: yes
+
+    - name: Override install status if verification fails
+      set_fact:
+        deploy_result: "{{ deploy_result | combine({'installed': false, 'details': 'DISM reported success but Get-HotFix did not find KB'}) }}"
+      when:
+        - deploy_result.installed
+        - verify_result.stdout is defined
+        - "'VERIFY:found' not in verify_result.stdout"
+
+    - name: Reboot if required
+      ansible.windows.win_reboot:
+        reboot_timeout: 600
+      when: deploy_result.reboot_required
+
+    - name: Return deployment result
+      debug:
+        var: deploy_result

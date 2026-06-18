@@ -1,0 +1,18 @@
+---
+- name: Get installed Windows updates via Get-HotFix
+  hosts: windows
+  gather_facts: yes
+  tasks:
+    - name: Run Get-HotFix and return installed KBs
+      ansible.windows.win_shell: |
+        $hotfixes = Get-HotFix | Select-Object -ExpandProperty HotFixID
+        $result = @{
+          hostname = $env:COMPUTERNAME
+          installed_kbs = @($hotfixes)
+        }
+        $result | ConvertTo-Json -Compress
+      register: hotfix_output
+
+    - name: Return hotfix data
+      debug:
+        msg: "{{ hotfix_output.stdout }}"

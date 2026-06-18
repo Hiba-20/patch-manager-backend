@@ -1,0 +1,55 @@
+---
+- name: Check available Windows updates
+  hosts: windows
+  gather_facts: yes
+  tasks:
+    - name: Search for available updates
+      win_updates:
+        category_names: "*"
+        state: searched
+      register: update_result
+
+    - name: Derive severity from category list
+      set_fact:
+        _kb_list: >
+          [
+          {% for kb, info in update_result.updates.items() %}
+          {
+            "kb_id": "{{ kb }}",
+            "title": "{{ info.title | default('') | replace('\"', '\\\"') }}",
+            "categories": [
+              {% for cat in info.categories | default([]) %}
+              "{{ cat.Name | default(cat) | replace('\"', '\\\"') }}"
+              {% if not loop.last %},{% endif %}
+              {% endfor %}
+            ],
+            "security_update": {{ info.categories | selectattr('Name', 'equalto', 'SecurityUpdates') | list | length > 0 | lower }},
+            "critical_update": {{ info.categories | selectattr('Name', 'equalto', 'CriticalUpdates') | list | length > 0 | lower }},
+            "support_url": "{{ info.support_url | default('') | replace('\"', '\\\"') }}"
+          }
+          {% if not loop.last %},{% endif %}
+          {% endfor %}
+          ]
+
+    - name: Build structured update data
+      set_fact:
+        update_data:
+          hostname: "{{ ansible_hostname }}"
+          available_updates: >
+            [
+            {% for item in _kb_list %}
+            {
+              "kb_id": "{{ item.kb_id }}",
+              "title": "{{ item.title }}",
+              "severity": {% if item.security_update %}"Critical"{% elif item.critical_update %}"Critical"{% else %}"Important"{% endif %},
+              "categories": {{ item.categories | to_json }},
+              "installed": false,
+              "support_url": "{{ item.support_url }}"
+            }
+            {% if not loop.last %},{% endif %}
+            {% endfor %}
+            ]
+
+    - name: Return update data
+      debug:
+        var: update_data

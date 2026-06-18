@@ -1,0 +1,48 @@
+---
+# check_windows_updates_online.yml
+#
+# Online replacement for check_windows_updates_offline.yml.
+# Uses ansible.windows.win_updates in "searched" mode — this only
+# QUERIES Microsoft Update for missing KBs, it does not install anything.
+#
+# Why `become: yes / become_method: runas / become_user: SYSTEM`:
+# The Windows Update Agent COM API rejects calls made over a plain
+# WinRM token. This is the exact same constraint that forced your
+# offline scan to a SYSTEM scheduled task — it doesn't go away
+# just because the VM now has internet access.
+
+- name: Scan for missing Windows Updates (online, via Microsoft Update)
+  hosts: windows
+  gather_facts: no
+  vars:
+    # Deliberately excluding "FeaturePacks" and "Drivers":
+    #   - FeaturePacks can pull in feature-level OS upgrades (large, disruptive,
+    #     not what a "compliance scan" should silently surface)
+    #   - Drivers are noisy, frequently irrelevant to your compliance scoring,
+    #     and a common cause of unwanted reboots
+    update_categories:
+      - SecurityUpdates
+      - CriticalUpdates
+      - UpdateRollups
+      - DefinitionUpdates
+
+  tasks:
+    - name: Query Microsoft Update for missing updates (no install)
+      ansible.windows.win_updates:
+        category_names: "{{ update_categories }}"
+        state: searched
+        server_selection: windows_update   # bypass any WSUS GPO baked into the VM image
+        reboot: no
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
+      register: scan_result
+
+    - name: Normalize result into a shape scan_parser.py can consume
+      ansible.builtin.set_fact:
+        missing_updates: "{{ scan_result.updates | default({}) }}"
+        missing_update_count: "{{ scan_result.found_update_count | default(0) }}"
+
+    - name: Show summary
+      ansible.builtin.debug:
+        msg: "Found {{ missing_update_count }} missing update(s)"

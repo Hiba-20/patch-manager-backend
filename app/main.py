@@ -9,6 +9,7 @@ from app.database import Base, engine, SessionLocal
 from app.models import models
 from app.models.models import Administrator, UserRole
 from app.routers import audit_logs, auth, dashboard, groups, hosts, patches, scans
+from app.services.scheduler import start_scheduler, stop_scheduler
 
 Base.metadata.create_all(bind=engine)
 
@@ -52,6 +53,16 @@ app.include_router(patches.router)
 app.include_router(groups.router)
 app.include_router(audit_logs.router)
 app.include_router(dashboard.router)
+
+
+@app.on_event("startup")
+def on_startup():
+    start_scheduler()
+
+
+@app.on_event("shutdown")
+def on_shutdown():
+    stop_scheduler()
 
 
 @app.get("/health")
