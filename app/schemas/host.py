@@ -10,6 +10,17 @@ class HostCreate(BaseModel):
     os_type: Literal["linux", "windows"]
 
 
+class HardwareInfoResponse(BaseModel):
+    cpu_model: str | None
+    cpu_cores: int | None
+    ram_total_gb: float | None
+    ram_used_percent: float | None
+    disk_total_gb: float | None
+    disk_used_percent: float | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class HostResponse(BaseModel):
     id: str
     hostname: str
@@ -39,6 +50,7 @@ class PatchOnHost(BaseModel):
     severity: str | None
     status: str
     scheduled_at: datetime | None
+    cve_references: list[str] | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -46,6 +58,7 @@ class PatchOnHost(BaseModel):
 class HostSoftwareResponse(BaseModel):
     host_id: str
     hostname: str
+    hardware: HardwareInfoResponse | None = None
     software: list[SoftwareItem]
     patches: list[PatchOnHost]
 
