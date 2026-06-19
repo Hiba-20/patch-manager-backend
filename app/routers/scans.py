@@ -6,8 +6,9 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.models import Host, OSType, ScanResult, ScanStatus
-from app.schemas.scan import LatestScanResponse, ScanRequest, ScanResponse
+from app.schemas.scan import LatestScanResponse, ScanListResponse, ScanRequest, ScanResponse
 from app.services.ansible_service import run_inventory_playbook
+from app.services.scan_parser import parse_inventory_data
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
 
@@ -68,7 +69,38 @@ def create_scan(scan_in: ScanRequest, db: Session = Depends(get_db)):
     db.add(scan)
     db.commit()
     db.refresh(scan)
+
+    if scan_status == ScanStatus.COMPLETED:
+        parse_inventory_data(scan, db)
+
     return _to_scan_response(scan, scan_in.scan_type)
+
+
+@router.get("/all", response_model=list[ScanListResponse])
+def list_scans(db: Session = Depends(get_db)):
+    scans = (
+        db.query(ScanResult)
+        .order_by(ScanResult.started_at.desc())
+        .limit(100)
+        .all()
+    )
+    result = []
+    for scan in scans:
+        host = db.query(Host).filter(Host.id == scan.host_id).first()
+        hostname = host.hostname if host else "unknown"
+        if host and host.hardware_info:
+            host.last_seen = scan.started_at
+        result.append(
+            ScanListResponse(
+                id=str(scan.id),
+                host_id=str(scan.host_id),
+                hostname=hostname,
+                status=scan.status.value.lower(),
+                started_at=scan.started_at,
+                finished_at=scan.finished_at,
+            )
+        )
+    return result
 
 
 @router.get("/hosts/{host_id}/latest", response_model=LatestScanResponse)

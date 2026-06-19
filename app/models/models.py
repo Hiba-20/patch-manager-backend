@@ -139,6 +139,7 @@ class PatchDeployment(Base):
     scheduled_at = Column(DateTime)
     started_at = Column(DateTime)
     finished_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
     ansible_job_id = Column(UUID(as_uuid=True), ForeignKey("ansible_jobs.id"), nullable=True)
     logs = Column(Text)
 
