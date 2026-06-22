@@ -108,3 +108,16 @@ def remove_host_from_group(group_id: str, host_id: str, db: Session = Depends(ge
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group or Host not found")
     group.remove_host(host)
     db.commit()
+
+
+@router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_group(group_id: str, db: Session = Depends(get_db)):
+    try:
+        group = db.query(Group).filter(Group.id == uuid.UUID(group_id)).first()
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid group_id")
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
+    group.hosts = []
+    db.delete(group)
+    db.commit()

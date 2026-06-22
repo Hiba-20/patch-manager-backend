@@ -25,6 +25,7 @@ from app.schemas.host import (
     HostCreateResponse,
     HostResponse,
     HostSoftwareResponse,
+    HostUpdate,
     PatchOnHost,
     SoftwareItem,
     HardwareInfoResponse,
@@ -117,6 +118,72 @@ def get_host(host_id: str, db: Session = Depends(get_db)):
             detail=f"Host '{host_id}' not found",
         )
     return _to_host_response(host)
+
+
+@router.put("/{host_id}", response_model=HostResponse)
+def update_host(
+    host_id: str,
+    host_in: HostUpdate,
+    db: Session = Depends(get_db),
+    current_user: Administrator = Depends(get_current_user),
+):
+    try:
+        host_uuid = uuid.UUID(host_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid host_id format",
+        ) from exc
+
+    host = db.query(Host).filter(Host.id == host_uuid).first()
+    if not host:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Host '{host_id}' not found",
+        )
+
+    if host_in.hostname is not None:
+        existing = db.query(Host).filter(Host.hostname == host_in.hostname, Host.id != host_uuid).first()
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Host with hostname '{host_in.hostname}' already exists",
+            )
+        host.hostname = host_in.hostname
+    if host_in.ip_address is not None:
+        host.ip_address = host_in.ip_address
+    if host_in.os_type is not None:
+        host.os_type = _map_os_type(host_in.os_type)
+
+    db.commit()
+    db.refresh(host)
+    return _to_host_response(host)
+
+
+@router.delete("/{host_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_host(
+    host_id: str,
+    db: Session = Depends(get_db),
+    current_user: Administrator = Depends(get_current_user),
+):
+    try:
+        host_uuid = uuid.UUID(host_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid host_id format",
+        ) from exc
+
+    host = db.query(Host).filter(Host.id == host_uuid).first()
+    if not host:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Host '{host_id}' not found",
+        )
+
+    db.query(PatchDeployment).filter(PatchDeployment.host_id == host_uuid).delete()
+    db.delete(host)
+    db.commit()
 
 
 @router.get("/{host_id}/software", response_model=HostSoftwareResponse)

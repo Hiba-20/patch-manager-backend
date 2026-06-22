@@ -18,9 +18,12 @@ class UserRole(str, enum.Enum):
 
 class PatchStatus(str, enum.Enum):
     PENDING = "PENDING"
+    APPROVED = "APPROVED"
     IN_PROGRESS = "IN_PROGRESS"
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"
     ROLLBACK = "ROLLBACK"
 
 class ScanStatus(str, enum.Enum):

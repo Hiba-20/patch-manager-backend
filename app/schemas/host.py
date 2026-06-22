@@ -10,6 +10,12 @@ class HostCreate(BaseModel):
     os_type: Literal["linux", "windows"]
 
 
+class HostUpdate(BaseModel):
+    hostname: str | None = None
+    ip_address: str | None = None
+    os_type: Literal["linux", "windows"] | None = None
+
+
 class HardwareInfoResponse(BaseModel):
     cpu_model: str | None
     cpu_cores: int | None
