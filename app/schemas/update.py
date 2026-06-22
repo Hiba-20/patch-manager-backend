@@ -1,5 +1,7 @@
 import re
 
+from datetime import datetime
+
 from pydantic import BaseModel, field_validator
 
 
@@ -26,6 +28,7 @@ class DeployPatchRequest(BaseModel):
     title: str = ""
     severity: str = "Important"
     auto_reboot: bool = False
+    scheduled_at: datetime | None = None
 
     @field_validator("kb_id")
     @classmethod

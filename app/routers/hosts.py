@@ -486,13 +486,25 @@ def deploy_patch(
         patch_id=patch.id,
         host_id=host.id,
         approved_by=current_user.id,
-        status=PatchStatus.IN_PROGRESS,
-        scheduled_at=datetime.utcnow(),
-        started_at=datetime.utcnow(),
+        status=PatchStatus.IN_PROGRESS if not req.scheduled_at else PatchStatus.APPROVED,
+        scheduled_at=req.scheduled_at or datetime.utcnow(),
+        started_at=datetime.utcnow() if not req.scheduled_at else None,
     )
     db.add(dep)
     db.commit()
     db.refresh(dep)
+
+    if req.scheduled_at:
+        return DeployPatchResponse(
+            deployment_id=str(dep.id),
+            patch_id=str(patch.id),
+            host_id=str(host.id),
+            hostname=host.hostname,
+            kb_id=req.kb_id,
+            status=dep.status.value,
+            reboot_required=False,
+            details=f"Scheduled for {req.scheduled_at.isoformat()}",
+        )
 
     ansible_result = run_online_deploy(str(host.id), req.kb_id, req.auto_reboot)
 
