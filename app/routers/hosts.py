@@ -22,6 +22,7 @@ from app.models.models import (
 )
 from app.schemas.host import (
     HostCreate,
+    HostCreateResponse,
     HostResponse,
     HostSoftwareResponse,
     PatchOnHost,
@@ -39,7 +40,6 @@ from app.services.ansible_service import (
     run_get_hotfix,
     run_online_deploy,
     run_online_scan,
-    run_update_check,
 )
 from app.services.scan_parser import flatten_win_updates_result
 from app.services.scheduler import scheduled_scan_all_hosts
@@ -70,7 +70,7 @@ def _to_host_response(host: Host) -> HostResponse:
     )
 
 
-@router.post("", response_model=HostResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=HostCreateResponse, status_code=status.HTTP_201_CREATED)
 def create_host(host_in: HostCreate, db: Session = Depends(get_db)):
     existing = db.query(Host).filter(Host.hostname == host_in.hostname).first()
     if existing:
@@ -90,7 +90,8 @@ def create_host(host_in: HostCreate, db: Session = Depends(get_db)):
     db.add(host)
     db.commit()
     db.refresh(host)
-    return _to_host_response(host)
+    resp = _to_host_response(host)
+    return HostCreateResponse(**resp.model_dump(), api_key=api_key)
 
 
 @router.get("", response_model=list[HostResponse])
@@ -268,15 +269,15 @@ def get_fast_updates(host_id: str, db: Session = Depends(get_db)):
         raw_updates = host.cached_scan_result.get("available_updates", []) or []
         cached_at = host.cached_scan_at
     else:
-        result = run_update_check(str(host.id))
+        result = run_online_scan(str(host.id))
         if result["rc"] != 0:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Update check failed: {result['status']}",
             )
-        update_data = result.get("update_data", {})
-        raw_updates = update_data.get("available_updates", []) or []
-        host.cached_scan_result = update_data
+        raw = result.get("missing_updates", {}) or {}
+        raw_updates = flatten_win_updates_result(raw)
+        host.cached_scan_result = {"available_updates": raw_updates}
         host.cached_scan_at = now
         cached_at = now
 
@@ -366,119 +367,6 @@ def scan_online(
 
 @router.post("/{host_id}/deploy-patch", response_model=DeployPatchResponse)
 def deploy_patch(
-    host_id: str,
-    req: DeployPatchRequest,
-    db: Session = Depends(get_db),
-    current_user: Administrator = Depends(get_current_user),
-):
-    try:
-        host_uuid = uuid.UUID(host_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Invalid host_id format",
-        ) from exc
-
-    host = db.query(Host).filter(Host.id == host_uuid).first()
-    if not host:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Host '{host_id}' not found",
-        )
-
-    if host.os_type != OSType.WINDOWS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Patch deployment only supported for Windows hosts",
-        )
-
-    existing_patch = db.query(Patch).filter(
-        Patch.name == req.kb_id,
-        Patch.os_type == OSType.WINDOWS,
-    ).first()
-
-    if existing_patch:
-        patch = existing_patch
-    else:
-        patch = Patch(
-            id=uuid.uuid4(),
-            name=req.kb_id,
-            version="1.0",
-            vendor="Microsoft",
-            os_type=OSType.WINDOWS,
-            severity=req.severity,
-            cve_references=[],
-        )
-        db.add(patch)
-        db.commit()
-        db.refresh(patch)
-
-    dep = PatchDeployment(
-        id=uuid.uuid4(),
-        patch_id=patch.id,
-        host_id=host.id,
-        approved_by=current_user.id,
-        status=PatchStatus.IN_PROGRESS,
-        scheduled_at=datetime.utcnow(),
-        started_at=datetime.utcnow(),
-    )
-    db.add(dep)
-    db.commit()
-    db.refresh(dep)
-
-    ansible_result = run_online_deploy(str(host.id), req.kb_id, req.auto_reboot)
-
-    dep.finished_at = datetime.utcnow()
-    dep.status = (
-        PatchStatus.SUCCESS if ansible_result["rc"] == 0 else PatchStatus.FAILED
-    )
-    dep.reboot_required = bool(ansible_result.get("reboot_required", False))
-    dep.logs = str(ansible_result.get("events", []))
-    if dep.status == PatchStatus.SUCCESS:
-        host.cached_scan_result = None
-        host.cached_scan_at = None
-    db.commit()
-
-    ansible_job = AnsibleJob(
-        id=uuid.uuid4(),
-        deployment_id=dep.id,
-        playbook="ansible/playbooks/deploy_windows_patch_online.yml",
-        inventory_snapshot={"host_id": str(host.id), "kb_id": req.kb_id, "auto_reboot": req.auto_reboot},
-        started_at=dep.started_at,
-        finished_at=dep.finished_at,
-        return_code=ansible_result["rc"],
-        stdout=str(ansible_result.get("events", [])),
-    )
-    db.add(ansible_job)
-
-    audit = AuditLog(
-        id=uuid.uuid4(),
-        user_id=current_user.id,
-        action=AuditAction.PATCH_DEPLOYED,
-        target_host_id=host.id,
-        status=dep.status.value,
-        details={"kb_id": req.kb_id, "patch_id": str(patch.id), "online": True},
-    )
-    db.add(audit)
-    db.commit()
-
-    dep.ansible_job_id = ansible_job.id
-    db.commit()
-
-    return DeployPatchResponse(
-        deployment_id=str(dep.id),
-        patch_id=str(patch.id),
-        host_id=str(host.id),
-        hostname=host.hostname,
-        kb_id=req.kb_id,
-        status=dep.status.value,
-        reboot_required=dep.reboot_required,
-        details=f"Online deploy via PSWindowsUpdate (auto_reboot={req.auto_reboot})",
-    )
-
-
-@router.post("/{host_id}/deploy-patch-online", response_model=DeployPatchResponse)
-def deploy_patch_online(
     host_id: str,
     req: DeployPatchRequest,
     db: Session = Depends(get_db),

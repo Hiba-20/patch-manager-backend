@@ -32,6 +32,16 @@ class HostResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class HostCreateResponse(BaseModel):
+    id: str
+    hostname: str
+    ip_address: str
+    os_type: str
+    status: str
+    created_at: datetime
+    api_key: str
+
+
 class SoftwareItem(BaseModel):
     id: str
     name: str
