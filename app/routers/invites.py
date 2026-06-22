@@ -1,6 +1,6 @@
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -74,7 +74,7 @@ def create_invite(
     current_user: Administrator = Depends(get_current_user),
 ):
     code = secrets.token_urlsafe(24)
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=req.expires_in_hours)
+    expires_at = datetime.utcnow() + timedelta(hours=req.expires_in_hours)
     token = InviteToken(
         id=uuid.uuid4(),
         code=code,
