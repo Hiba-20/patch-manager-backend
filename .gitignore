@@ -10,3 +10,12 @@ venv/
 
 # Ansible runner generated artifacts (one per scan)
 artifacts/
+
+# SQLite test databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# pytest cache
+.pytest_cache/

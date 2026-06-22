@@ -36,6 +36,8 @@ class AuditAction(str, enum.Enum):
     PATCH_DEPLOYED = "PATCH_DEPLOYED"
     HOST_REGISTERED = "HOST_REGISTERED"
     KEY_ROTATED = "KEY_ROTATED"
+    INVITE_CREATED = "INVITE_CREATED"
+    INVITE_REVOKED = "INVITE_REVOKED"
 
 
 # Many-to-Many association table between Group and Host
@@ -262,6 +264,34 @@ class Administrator(Base):
 
     def generate_report(self) -> dict:
         return {"report": "summary"}
+
+
+class InviteToken(Base):
+    __tablename__ = "invite_tokens"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code = Column(String, unique=True, nullable=False, index=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("administrators.id", ondelete="CASCADE"), nullable=False)
+    used_by = Column(UUID(as_uuid=True), ForeignKey("administrators.id", ondelete="SET NULL"), nullable=True)
+    expires_at = Column(DateTime, nullable=False)
+    max_uses = Column(Integer, default=1, nullable=False)
+    use_count = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    creator = relationship("Administrator", foreign_keys=[created_by], backref="created_invites")
+    user = relationship("Administrator", foreign_keys=[used_by], backref="used_invite")
+
+    @property
+    def is_expired(self) -> bool:
+        return datetime.utcnow() > self.expires_at
+
+    @property
+    def is_exhausted(self) -> bool:
+        return self.use_count >= self.max_uses
+
+    @property
+    def is_valid(self) -> bool:
+        return not self.is_expired and not self.is_exhausted
 
 
 class AuditLog(Base):
