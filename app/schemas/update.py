@@ -1,11 +1,6 @@
-import re
-
 from datetime import datetime
 
-from pydantic import BaseModel, field_validator
-
-
-KB_PATTERN = re.compile(r"^KB\d{6,7}$")
+from pydantic import BaseModel
 
 
 class MissingUpdate(BaseModel):
@@ -29,16 +24,6 @@ class DeployPatchRequest(BaseModel):
     severity: str = "Important"
     auto_reboot: bool = False
     scheduled_at: datetime | None = None
-
-    @field_validator("kb_id")
-    @classmethod
-    def validate_kb_id(cls, v: str) -> str:
-        stripped = v.strip()
-        if not KB_PATTERN.match(stripped):
-            raise ValueError(
-                f"Invalid KB ID '{v}'. Must match format KB followed by 6-7 digits (e.g. KB5034123)"
-            )
-        return stripped
 
 
 class DeployPatchResponse(BaseModel):

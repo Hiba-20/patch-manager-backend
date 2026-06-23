@@ -71,6 +71,23 @@ def _to_host_response(host: Host) -> HostResponse:
     )
 
 
+def _normalize_scan_result(result: dict, os_type: str) -> list[dict]:
+    if os_type.lower().startswith("linux"):
+        raw = result.get("upgradable_packages", []) or []
+        return [
+            {
+                "kb_id": pkg["package"],
+                "title": f"{pkg.get('available_version', '')} (installed: {pkg.get('installed_version', '')})",
+                "severity": "Important",
+                "categories": ["Linux"],
+                "installed": False,
+            }
+            for pkg in raw
+        ]
+    raw = result.get("missing_updates", {}) or {}
+    return flatten_win_updates_result(raw)
+
+
 @router.post("", response_model=HostCreateResponse, status_code=status.HTTP_201_CREATED)
 def create_host(host_in: HostCreate, db: Session = Depends(get_db)):
     existing = db.query(Host).filter(Host.hostname == host_in.hostname).first()
@@ -261,13 +278,8 @@ def get_missing_updates(host_id: str, db: Session = Depends(get_db)):
             detail=f"Host '{host_id}' not found",
         )
 
-    if host.os_type != OSType.WINDOWS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing updates only supported for Windows hosts",
-        )
-
-    result = run_online_scan(str(host.id))
+    os_str = host.os_type.value.lower()
+    result = run_online_scan(str(host.id), os_type=os_str)
     if result["rc"] != 0:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -275,8 +287,7 @@ def get_missing_updates(host_id: str, db: Session = Depends(get_db)):
         )
 
     now = datetime.utcnow()
-    raw_updates = result.get("missing_updates", {}) or {}
-    flat = flatten_win_updates_result(raw_updates)
+    flat = _normalize_scan_result(result, os_str)
 
     host.cached_scan_result = {"available_updates": flat}
     host.cached_scan_at = now
@@ -320,12 +331,7 @@ def get_fast_updates(host_id: str, db: Session = Depends(get_db)):
             detail=f"Host '{host_id}' not found",
         )
 
-    if host.os_type != OSType.WINDOWS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing updates only supported for Windows hosts",
-        )
-
+    os_str = host.os_type.value.lower()
     now = datetime.utcnow()
     cache_hours = 24
     if (
@@ -336,14 +342,13 @@ def get_fast_updates(host_id: str, db: Session = Depends(get_db)):
         raw_updates = host.cached_scan_result.get("available_updates", []) or []
         cached_at = host.cached_scan_at
     else:
-        result = run_online_scan(str(host.id))
+        result = run_online_scan(str(host.id), os_type=os_str)
         if result["rc"] != 0:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Update check failed: {result['status']}",
             )
-        raw = result.get("missing_updates", {}) or {}
-        raw_updates = flatten_win_updates_result(raw)
+        raw_updates = _normalize_scan_result(result, os_str)
         host.cached_scan_result = {"available_updates": raw_updates}
         host.cached_scan_at = now
         cached_at = now
@@ -391,13 +396,8 @@ def scan_online(
             detail=f"Host '{host_id}' not found",
         )
 
-    if host.os_type != OSType.WINDOWS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Online scan only supported for Windows hosts",
-        )
-
-    result = run_online_scan(str(host.id))
+    os_str = host.os_type.value.lower()
+    result = run_online_scan(str(host.id), os_type=os_str)
     if result["rc"] != 0:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -405,8 +405,7 @@ def scan_online(
         )
 
     now = datetime.utcnow()
-    raw_updates = result.get("missing_updates", {}) or {}
-    flat = flatten_win_updates_result(raw_updates)
+    flat = _normalize_scan_result(result, os_str)
 
     host.cached_scan_result = {"available_updates": flat}
     host.cached_scan_at = now
@@ -454,15 +453,12 @@ def deploy_patch(
             detail=f"Host '{host_id}' not found",
         )
 
-    if host.os_type != OSType.WINDOWS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Patch deployment only supported for Windows hosts",
-        )
+    os_str = host.os_type.value.lower()
+    is_linux = os_str.startswith("linux")
 
     existing_patch = db.query(Patch).filter(
         Patch.name == req.kb_id,
-        Patch.os_type == OSType.WINDOWS,
+        Patch.os_type == host.os_type,
     ).first()
 
     if existing_patch:
@@ -472,8 +468,8 @@ def deploy_patch(
             id=uuid.uuid4(),
             name=req.kb_id,
             version="1.0",
-            vendor="Microsoft",
-            os_type=OSType.WINDOWS,
+            vendor="Linux" if is_linux else "Microsoft",
+            os_type=host.os_type,
             severity=req.severity,
             cve_references=[],
         )
@@ -506,7 +502,7 @@ def deploy_patch(
             details=f"Scheduled for {req.scheduled_at.isoformat()}",
         )
 
-    ansible_result = run_online_deploy(str(host.id), req.kb_id, req.auto_reboot)
+    ansible_result = run_online_deploy(str(host.id), req.kb_id, req.auto_reboot, os_type=os_str)
 
     dep.finished_at = datetime.utcnow()
     dep.status = (
@@ -519,11 +515,13 @@ def deploy_patch(
         host.cached_scan_at = None
     db.commit()
 
+    is_debian = os_str in ("linux", "linux_debian")
+    playbook = "ansible/playbooks/deploy_linux_patch.yml" if is_debian else "ansible/playbooks/deploy_linux_patch_rhel.yml" if is_linux else "ansible/playbooks/deploy_windows_patch_online.yml"
     ansible_job = AnsibleJob(
         id=uuid.uuid4(),
         deployment_id=dep.id,
-        playbook="ansible/playbooks/deploy_windows_patch_online.yml",
-        inventory_snapshot={"host_id": str(host.id), "kb_id": req.kb_id, "auto_reboot": req.auto_reboot},
+        playbook=playbook,
+        inventory_snapshot={"host_id": str(host.id), "kb_id": req.kb_id, "auto_reboot": req.auto_reboot, "os_type": os_str},
         started_at=dep.started_at,
         finished_at=dep.finished_at,
         return_code=ansible_result["rc"],
@@ -537,7 +535,7 @@ def deploy_patch(
         action=AuditAction.PATCH_DEPLOYED,
         target_host_id=host.id,
         status=dep.status.value,
-        details={"kb_id": req.kb_id, "patch_id": str(patch.id), "online": True},
+        details={"kb_id": req.kb_id, "patch_id": str(patch.id), "online": True, "os_type": os_str},
     )
     db.add(audit)
     db.commit()
@@ -545,6 +543,7 @@ def deploy_patch(
     dep.ansible_job_id = ansible_job.id
     db.commit()
 
+    detail = f"Online deploy via {'Linux package manager' if is_linux else 'PSWindowsUpdate'} (auto_reboot={req.auto_reboot})"
     return DeployPatchResponse(
         deployment_id=str(dep.id),
         patch_id=str(patch.id),
@@ -553,7 +552,7 @@ def deploy_patch(
         kb_id=req.kb_id,
         status=dep.status.value,
         reboot_required=dep.reboot_required,
-        details=f"Online deploy via PSWindowsUpdate (auto_reboot={req.auto_reboot})",
+        details=detail,
     )
 
 

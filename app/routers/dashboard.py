@@ -3,7 +3,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.models import Host, OSType
+from app.models.models import Host
 from app.schemas.dashboard import DashboardStatsResponse
 from app.schemas.update import DashboardMissingUpdate, DashboardMissingUpdatesResponse
 from datetime import datetime, timedelta
@@ -67,13 +67,16 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
 
 @router.get("/missing-updates", response_model=DashboardMissingUpdatesResponse)
 def get_dashboard_missing_updates(db: Session = Depends(get_db)):
-    windows_hosts = db.query(Host).filter(Host.os_type == OSType.WINDOWS).all()
+    hosts = db.query(Host).all()
     all_updates: list[DashboardMissingUpdate] = []
 
     now = datetime.utcnow()
     cache_hours = 24
-    for host in windows_hosts:
+    for host in hosts:
         try:
+            os_str = host.os_type.value.lower()
+            is_linux = os_str.startswith("linux")
+
             if (
                 host.cached_scan_result
                 and host.cached_scan_at
@@ -81,11 +84,24 @@ def get_dashboard_missing_updates(db: Session = Depends(get_db)):
             ):
                 raw_updates = host.cached_scan_result.get("available_updates", []) or []
             else:
-                result = run_online_scan(str(host.id))
+                result = run_online_scan(str(host.id), os_type=os_str)
                 if result["rc"] != 0:
                     continue
-                raw = result.get("missing_updates", {}) or {}
-                raw_updates = flatten_win_updates_result(raw)
+                if is_linux:
+                    raw = result.get("upgradable_packages", []) or []
+                    raw_updates = [
+                        {
+                            "kb_id": pkg["package"],
+                            "title": f"{pkg.get('available_version', '')} (installed: {pkg.get('installed_version', '')})",
+                            "severity": "Important",
+                            "categories": ["Linux"],
+                            "installed": False,
+                        }
+                        for pkg in raw
+                    ]
+                else:
+                    raw = result.get("missing_updates", {}) or {}
+                    raw_updates = flatten_win_updates_result(raw)
                 host.cached_scan_result = {"available_updates": raw_updates}
                 host.cached_scan_at = now
             for u in raw_updates:
