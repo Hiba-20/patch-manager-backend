@@ -1,0 +1,62 @@
+---
+# check_linux_updates_rhel.yml
+#
+# Scans RHEL/CentOS/Fedora hosts for available package updates using
+# `dnf check-update`. Parses output and matches against installed
+# versions from `rpm -q` for a complete picture.
+
+- name: Scan for available Linux package updates (RHEL/CentOS/Fedora)
+  hosts: linux
+  gather_facts: no
+
+  tasks:
+    - name: Query dnf for available updates
+      ansible.builtin.shell: |
+        dnf check-update --quiet 2>/dev/null | tail -n +2
+      register: dnf_raw
+      changed_when: false
+      args:
+        executable: /bin/bash
+      failed_when: dnf_raw.rc != 0 and dnf_raw.rc != 100
+
+    - name: Extract package names from available updates
+      ansible.builtin.set_fact:
+        update_lines: "{{ dnf_raw.stdout_lines
+          | reject('match', '^$')
+          | map('regex_replace', '^(\\S+)\\.\\S+\\s+(\\S+)\\s+(\\S+).*$', '\\1')
+          | list }}"
+
+    - name: Query installed versions for each package (batch)
+      ansible.builtin.shell: |
+        rpm -q --queryformat '%{NAME}|%{VERSION}-%{RELEASE}\n' {{ update_lines | join(' ') }} 2>/dev/null
+      register: rpm_raw
+      changed_when: false
+      args:
+        executable: /bin/bash
+      when: update_lines | length > 0
+
+    - name: Build final package list
+      ansible.builtin.set_fact:
+        upgradable_packages: >-
+          {%- set result = [] -%}
+          {%- for line in dnf_raw.stdout_lines if line | length > 0 -%}
+          {%-   set parts = line.split() -%}
+          {%-   if parts | length >= 3 -%}
+          {%-     set pkg_name = parts[0].split('.')[0] -%}
+          {%-     set avail_ver = parts[1] -%}
+          {%-     set repo = parts[2] -%}
+          {%-     set inst_ver = 'unknown' -%}
+          {%-     for rline in rpm_raw.stdout_lines | default([]) -%}
+          {%-       set rparts = rline.split('|') -%}
+          {%-       if rparts | length >= 2 and rparts[0] == pkg_name -%}
+          {%-         set inst_ver = rparts[1] -%}
+          {%-       endif -%}
+          {%-     endfor -%}
+          {%-     set _ = result.append({ 'package': pkg_name, 'installed_version': inst_ver, 'available_version': avail_ver, 'repo': repo }) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ result }}
+
+    - name: Show summary
+      ansible.builtin.debug:
+        msg: "Found {{ upgradable_packages | length }} upgradable package(s)"
