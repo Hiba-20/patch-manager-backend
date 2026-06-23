@@ -7,8 +7,7 @@ from app.models.models import Host
 from app.schemas.dashboard import DashboardStatsResponse
 from app.schemas.update import DashboardMissingUpdate, DashboardMissingUpdatesResponse
 from datetime import datetime, timedelta
-from app.services.ansible_service import run_online_scan
-from app.services.scan_parser import flatten_win_updates_result
+from app.services.ansible_service import normalize_scan_result, run_online_scan
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -75,7 +74,6 @@ def get_dashboard_missing_updates(db: Session = Depends(get_db)):
     for host in hosts:
         try:
             os_str = host.os_type.value.lower()
-            is_linux = os_str.startswith("linux")
 
             if (
                 host.cached_scan_result
@@ -87,21 +85,7 @@ def get_dashboard_missing_updates(db: Session = Depends(get_db)):
                 result = run_online_scan(str(host.id), os_type=os_str)
                 if result["rc"] != 0:
                     continue
-                if is_linux:
-                    raw = result.get("upgradable_packages", []) or []
-                    raw_updates = [
-                        {
-                            "kb_id": pkg["package"],
-                            "title": f"{pkg.get('available_version', '')} (installed: {pkg.get('installed_version', '')})",
-                            "severity": "Important",
-                            "categories": ["Linux"],
-                            "installed": False,
-                        }
-                        for pkg in raw
-                    ]
-                else:
-                    raw = result.get("missing_updates", {}) or {}
-                    raw_updates = flatten_win_updates_result(raw)
+                raw_updates = normalize_scan_result(result, os_str)
                 host.cached_scan_result = {"available_updates": raw_updates}
                 host.cached_scan_at = now
             for u in raw_updates:

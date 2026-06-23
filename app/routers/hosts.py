@@ -37,12 +37,12 @@ from app.schemas.update import (
     MissingUpdate,
 )
 from app.services.ansible_service import (
+    normalize_scan_result,
     run_deploy_patch,
     run_get_hotfix,
     run_online_deploy,
     run_online_scan,
 )
-from app.services.scan_parser import flatten_win_updates_result
 from app.services.scheduler import scheduled_scan_all_hosts
 
 router = APIRouter(prefix="/api/hosts", tags=["hosts"])
@@ -69,23 +69,6 @@ def _to_host_response(host: Host) -> HostResponse:
         status="active" if host.is_active else "inactive",
         created_at=host.registered_at,
     )
-
-
-def _normalize_scan_result(result: dict, os_type: str) -> list[dict]:
-    if os_type.lower().startswith("linux"):
-        raw = result.get("upgradable_packages", []) or []
-        return [
-            {
-                "kb_id": pkg["package"],
-                "title": f"{pkg.get('available_version', '')} (installed: {pkg.get('installed_version', '')})",
-                "severity": "Important",
-                "categories": ["Linux"],
-                "installed": False,
-            }
-            for pkg in raw
-        ]
-    raw = result.get("missing_updates", {}) or {}
-    return flatten_win_updates_result(raw)
 
 
 @router.post("", response_model=HostCreateResponse, status_code=status.HTTP_201_CREATED)
@@ -287,7 +270,7 @@ def get_missing_updates(host_id: str, db: Session = Depends(get_db)):
         )
 
     now = datetime.utcnow()
-    flat = _normalize_scan_result(result, os_str)
+    flat = normalize_scan_result(result, os_str)
 
     host.cached_scan_result = {"available_updates": flat}
     host.cached_scan_at = now
@@ -348,7 +331,7 @@ def get_fast_updates(host_id: str, db: Session = Depends(get_db)):
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Update check failed: {result['status']}",
             )
-        raw_updates = _normalize_scan_result(result, os_str)
+        raw_updates = normalize_scan_result(result, os_str)
         host.cached_scan_result = {"available_updates": raw_updates}
         host.cached_scan_at = now
         cached_at = now
@@ -405,7 +388,7 @@ def scan_online(
         )
 
     now = datetime.utcnow()
-    flat = _normalize_scan_result(result, os_str)
+    flat = normalize_scan_result(result, os_str)
 
     host.cached_scan_result = {"available_updates": flat}
     host.cached_scan_at = now

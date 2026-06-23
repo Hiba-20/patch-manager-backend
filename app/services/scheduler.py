@@ -8,9 +8,8 @@ from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models.models import Host, OSType
-from app.services.ansible_service import run_online_scan
-from app.services.scan_parser import flatten_win_updates_result
+from app.models.models import Host
+from app.services.ansible_service import normalize_scan_result, run_online_scan
 
 load_dotenv()
 
@@ -27,7 +26,11 @@ def scheduled_scan_all_hosts():
         hosts = db.query(Host).all()
         for host in hosts:
             try:
-                result = run_online_scan(str(host.id), host_limit=host.hostname)
+                os_str = host.os_type.value.lower()
+                is_linux = os_str.startswith("linux")
+                host_limit = None if is_linux else host.hostname
+
+                result = run_online_scan(str(host.id), host_limit=host_limit, os_type=os_str)
                 if result["rc"] != 0:
                     logger.error(
                         "[scheduler] scan failed for %s: rc=%s",
@@ -35,8 +38,7 @@ def scheduled_scan_all_hosts():
                     )
                     continue
 
-                raw = result.get("missing_updates", {}) or {}
-                flat = flatten_win_updates_result(raw)
+                flat = normalize_scan_result(result, os_str)
                 host.cached_scan_result = {"available_updates": flat}
                 host.cached_scan_at = datetime.utcnow()
                 host.last_seen = datetime.utcnow()

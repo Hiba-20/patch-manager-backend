@@ -6,6 +6,8 @@ from typing import Any
 
 import ansible_runner
 
+from app.services.scan_parser import flatten_win_updates_result
+
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 INVENTORY_PLAYBOOK = BASE_DIR / "ansible/playbooks/collect_inventory.yml"
 CHECK_UPDATES_PLAYBOOK = BASE_DIR / "ansible/playbooks/check_windows_updates_offline.yml"
@@ -40,6 +42,23 @@ def _is_rhel_like(os_type: str) -> bool:
 
 def _is_linux(os_type: str) -> bool:
     return os_type.lower() in ("linux", "linux_debian", "linux_rhel", "linux_other")
+
+
+def normalize_scan_result(result: dict, os_type: str) -> list[dict]:
+    if os_type.lower().startswith("linux"):
+        raw = result.get("upgradable_packages", []) or []
+        return [
+            {
+                "kb_id": pkg["package"],
+                "title": f"{pkg.get('available_version', '')} (installed: {pkg.get('installed_version', '')})",
+                "severity": "Important",
+                "categories": ["Linux"],
+                "installed": False,
+            }
+            for pkg in raw
+        ]
+    raw = result.get("missing_updates", {}) or {}
+    return flatten_win_updates_result(raw)
 
 
 def _collect_events(runner: ansible_runner.Runner) -> list[dict[str, Any]]:
