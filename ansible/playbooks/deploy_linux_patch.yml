@@ -9,6 +9,7 @@
 - name: Deploy Linux package update (Debian/Ubuntu)
   hosts: linux
   gather_facts: no
+  become: yes
   vars:
     target_pkg: "{{ package_name | default('') }}"
 
@@ -16,6 +17,8 @@
     - name: Update apt cache before install
       ansible.builtin.apt:
         update_cache: yes
+      register: cache_update_result
+      ignore_errors: yes
       when: target_pkg != ""
 
     - name: Upgrade all packages

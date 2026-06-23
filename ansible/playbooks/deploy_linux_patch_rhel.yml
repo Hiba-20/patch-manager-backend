@@ -9,6 +9,7 @@
 - name: Deploy Linux package update (RHEL/CentOS/Fedora)
   hosts: linux
   gather_facts: no
+  become: yes
   vars:
     target_pkg: "{{ package_name | default('') }}"
 

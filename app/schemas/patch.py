@@ -1,5 +1,5 @@
-from datetime import datetime
-from pydantic import BaseModel, ConfigDict
+from datetime import datetime, timezone
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class PatchCreate(BaseModel):
@@ -46,3 +46,10 @@ class DeploymentResponse(BaseModel):
     logs: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("scheduled_at", "started_at", "finished_at", mode="after")
+    @classmethod
+    def ensure_utc(cls, v: datetime | None) -> datetime | None:
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v

@@ -1,7 +1,7 @@
 import hashlib
 import secrets
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -460,13 +460,19 @@ def deploy_patch(
         db.commit()
         db.refresh(patch)
 
+    raw_scheduled = req.scheduled_at
+    if raw_scheduled:
+        if raw_scheduled.tzinfo:
+            raw_scheduled = raw_scheduled.astimezone(timezone.utc).replace(tzinfo=None)
+    scheduled_at = raw_scheduled or datetime.utcnow()
+
     dep = PatchDeployment(
         id=uuid.uuid4(),
         patch_id=patch.id,
         host_id=host.id,
         approved_by=current_user.id,
         status=PatchStatus.IN_PROGRESS if not req.scheduled_at else PatchStatus.APPROVED,
-        scheduled_at=req.scheduled_at or datetime.utcnow(),
+        scheduled_at=scheduled_at,
         started_at=datetime.utcnow() if not req.scheduled_at else None,
     )
     db.add(dep)

@@ -1,7 +1,7 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class HostCreate(BaseModel):
@@ -69,6 +69,13 @@ class PatchOnHost(BaseModel):
     cve_references: list[str] | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("scheduled_at", mode="after")
+    @classmethod
+    def ensure_utc(cls, v: datetime | None) -> datetime | None:
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
 
 
 class HostSoftwareResponse(BaseModel):

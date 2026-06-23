@@ -4,12 +4,13 @@ from datetime import datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models.models import Host
-from app.services.ansible_service import normalize_scan_result, run_online_scan
+from app.models.models import Host, PatchDeployment, PatchStatus
+from app.services.ansible_service import normalize_scan_result, run_online_deploy, run_online_scan
 
 load_dotenv()
 
@@ -55,6 +56,61 @@ def scheduled_scan_all_hosts():
         db.close()
 
 
+def execute_scheduled_deployments():
+    db: Session = SessionLocal()
+    try:
+        now = datetime.utcnow()
+        deps = (
+            db.query(PatchDeployment)
+            .filter(PatchDeployment.status == PatchStatus.APPROVED)
+            .filter(PatchDeployment.scheduled_at <= now)
+            .all()
+        )
+        logger.info(
+            "[executor] checking %d APPROVED deployments (now=%s)",
+            len(deps), now.isoformat(),
+        )
+        for dep in deps:
+            host = dep.host
+            if not host:
+                logger.warning("[executor] dep %s has no host, skipping", dep.id)
+                continue
+            os_str = host.os_type.value.lower()
+            logger.info(
+                "[executor] executing scheduled %s on %s "
+                "(scheduled_at=%s, now=%s)",
+                dep.patch.name, host.hostname,
+                dep.scheduled_at.isoformat() if dep.scheduled_at else "N/A",
+                now.isoformat(),
+            )
+            dep.status = PatchStatus.IN_PROGRESS
+            dep.started_at = datetime.utcnow()
+            db.commit()
+
+            ansible_result = run_online_deploy(
+                str(host.id), dep.patch.name, False, os_type=os_str,
+            )
+
+            dep.finished_at = datetime.utcnow()
+            dep.status = (
+                PatchStatus.SUCCESS if ansible_result["rc"] == 0 else PatchStatus.FAILED
+            )
+            dep.reboot_required = bool(ansible_result.get("reboot_required", False))
+            dep.logs = str(ansible_result.get("events", []))
+            if dep.status == PatchStatus.SUCCESS:
+                host.cached_scan_result = None
+                host.cached_scan_at = None
+            db.commit()
+            logger.info(
+                "[executor] %s finished: %s (rc=%s)",
+                dep.patch.name, dep.status, ansible_result["rc"],
+            )
+    except Exception as exc:
+        logger.error("[executor] error: %s", exc)
+    finally:
+        db.close()
+
+
 def start_scheduler():
     scheduler.add_job(
         scheduled_scan_all_hosts,
@@ -63,11 +119,19 @@ def start_scheduler():
         replace_existing=True,
         max_instances=1,
     )
+    scheduler.add_job(
+        execute_scheduled_deployments,
+        trigger=IntervalTrigger(seconds=30),
+        id="deployment_executor",
+        replace_existing=True,
+        max_instances=3,
+    )
     scheduler.start()
     logger.info(
         "Compliance scan scheduler started (daily @ %02d:%02d Africa/Casablanca)",
         SCHEDULER_HOUR, SCHEDULER_MINUTE,
     )
+    logger.info("Deployment executor started (polling every 30s)")
 
 
 def stop_scheduler():

@@ -1,3 +1,4 @@
+import multiprocessing
 import os
 import platform
 import uuid
@@ -106,25 +107,41 @@ def _run_playbook(
     limit: str,
     ident: str,
     extra_vars: dict[str, Any] | None = None,
+    timeout_seconds: int = 600,
 ) -> dict[str, Any]:
     if platform.system() == "Darwin":
         os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
 
-    runner = ansible_runner.run(
-        private_data_dir=str(BASE_DIR),
-        playbook=str(playbook),
-        inventory=str(INVENTORY),
-        limit=limit,
-        ident=ident,
-        extravars=extra_vars or {},
-    )
+    result_queue: multiprocessing.Queue = multiprocessing.Queue()
 
-    events = _collect_events(runner)
-    return {
-        "status": runner.status,
-        "rc": runner.rc,
-        "events": events,
-    }
+    def _target():
+        runner = ansible_runner.run(
+            private_data_dir=str(BASE_DIR),
+            playbook=str(playbook),
+            inventory=str(INVENTORY),
+            limit=limit,
+            ident=ident,
+            extravars=extra_vars or {},
+        )
+        events = _collect_events(runner)
+        result_queue.put({
+            "status": runner.status,
+            "rc": runner.rc,
+            "events": events,
+        })
+
+    process = multiprocessing.Process(target=_target, daemon=True)
+    process.start()
+    process.join(timeout_seconds)
+
+    if process.is_alive():
+        process.terminate()
+        process.join(5)
+        if process.is_alive():
+            process.kill()
+        return {"status": "timeout", "rc": -1, "events": []}
+
+    return result_queue.get_nowait()
 
 
 def run_inventory_playbook(host_id: str, os_type: str) -> dict[str, Any]:

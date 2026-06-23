@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 @router.get("/stats", response_model=DashboardStatsResponse)
 def get_dashboard_stats(db: Session = Depends(get_db)):
     total = db.query(func.count(Host.id)).scalar() or 0
-    cutoff = datetime.utcnow() - timedelta(minutes=5)
+    cutoff = datetime.utcnow() - timedelta(hours=6)
     online = db.query(func.count(Host.id)).filter(Host.last_seen >= cutoff).scalar() or 0
     offline = total - online
 
