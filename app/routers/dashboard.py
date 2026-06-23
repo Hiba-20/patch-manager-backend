@@ -36,8 +36,10 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
                 sev_map[s] += 1
                 if s in ("Critical", "High"):
                     has_issues = True
-            elif s:
+            else:
                 sev_map["Medium"] += 1
+                if s.lower() == "important":
+                    has_issues = True
         if has_issues:
             hosts_with_issues += 1
 
