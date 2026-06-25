@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.models import Host, OSType, ScanResult, ScanStatus
-from app.schemas.scan import LatestScanResponse, ScanListResponse, ScanRequest, ScanResponse
+from app.schemas.scan import LatestScanResponse, ScanListResponse, ScanRequest, ScanResponse, ScanHistoryItem
 from app.services.ansible_service import run_inventory_playbook
 from app.services.scan_parser import parse_inventory_data
 
@@ -45,7 +45,7 @@ def create_scan(scan_in: ScanRequest, db: Session = Depends(get_db)):
         )
 
     os_type = _os_type_to_string(host.os_type)
-    ansible_result = run_inventory_playbook(str(host.id), os_type)
+    ansible_result = run_inventory_playbook(str(host.id), os_type, host=host)
 
     scan_status = (
         ScanStatus.COMPLETED if ansible_result["rc"] == 0 else ScanStatus.FAILED
@@ -142,3 +142,34 @@ def get_latest_scan(host_id: str, db: Session = Depends(get_db)):
         status=scan.status.value.lower(),
         execution_log=scan.raw_output,
     )
+
+
+@router.get("/hosts/{host_id}", response_model=list[ScanHistoryItem])
+def get_host_scan_history(host_id: str, db: Session = Depends(get_db)):
+    try:
+        host_uuid = uuid.UUID(host_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid host_id format",
+        ) from exc
+
+    scans = (
+        db.query(ScanResult)
+        .filter(ScanResult.host_id == host_uuid)
+        .order_by(ScanResult.started_at.desc())
+        .limit(50)
+        .all()
+    )
+
+    return [
+        ScanHistoryItem(
+            id=str(s.id),
+            status=s.status.value.lower(),
+            started_at=s.started_at,
+            finished_at=s.finished_at,
+            duration_seconds=s.get_duration(),
+            patch_count=len(s.software),
+        )
+        for s in scans
+    ]

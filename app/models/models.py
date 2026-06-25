@@ -91,6 +91,10 @@ class Host(Base):
     registered_at = Column(DateTime, default=datetime.utcnow)
     cached_scan_result = Column(JSON, nullable=True)
     cached_scan_at = Column(DateTime, nullable=True)
+    winrm_user = Column(String(255), nullable=True)
+    winrm_password = Column(String(512), nullable=True)
+    ssh_user = Column(String(255), nullable=True)
+    ssh_password = Column(String(512), nullable=True)
 
     # Relationships
     groups = relationship("Group", secondary=group_host_association, back_populates="hosts")
@@ -124,6 +128,7 @@ class Patch(Base):
     os_type = Column(SQLEnum(OSType), nullable=False)
     severity = Column(String)
     cve_references = Column(JSON)  # List[str]
+    classification = Column(String)
     ansible_playbook = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -159,6 +164,7 @@ class PatchDeployment(Base):
     # Dual relationships for the circular AnsibleJob/PatchDeployment reference
     ansible_job = relationship("AnsibleJob", foreign_keys=[ansible_job_id], back_populates="deployment_ref")
     ansible_jobs_triggered = relationship("AnsibleJob", foreign_keys="AnsibleJob.deployment_id", back_populates="deployment")
+    approval_logs = relationship("ApprovalLog", back_populates="deployment", cascade="all, delete-orphan")
 
     # Domain / helper methods from class diagram
     def approve(self, admin_id: uuid.UUID) -> None:
@@ -257,6 +263,7 @@ class Administrator(Base):
     approved_deployments = relationship("PatchDeployment", back_populates="approver")
     scans = relationship("ScanResult", back_populates="launcher")
     audit_logs = relationship("AuditLog", back_populates="user")
+    approval_logs = relationship("ApprovalLog", back_populates="admin", cascade="all, delete-orphan")
 
     # Domain / helper methods from class diagram
     def login(self, email: str, password_hash: str) -> str:
@@ -312,6 +319,20 @@ class AuditLog(Base):
     # Relationships
     user = relationship("Administrator", back_populates="audit_logs")
     target_host = relationship("Host", back_populates="audit_logs")
+
+
+class ApprovalLog(Base):
+    __tablename__ = "approval_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("patch_deployments.id", ondelete="CASCADE"), nullable=False)
+    admin_id = Column(UUID(as_uuid=True), ForeignKey("administrators.id", ondelete="CASCADE"), nullable=False)
+    action = Column(String, nullable=False)
+    comment = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    deployment = relationship("PatchDeployment", back_populates="approval_logs")
+    admin = relationship("Administrator", back_populates="approval_logs")
 
 
 class AnsibleJob(Base):

@@ -37,6 +37,10 @@
       ansible.windows.win_shell: |
         Import-Module PSWindowsUpdate
         $results = Install-WindowsUpdate -KBArticleID "{{ target_kb }}" -AcceptAll -IgnoreReboot -Verbose -Confirm:$false
+        if (-not $results) {
+          Write-Output '{"items":[],"reboot_required":false,"raw":"already_installed"}'
+          exit 0
+        }
         $rebootReq = $false
         $output = @()
         foreach ($r in $results) {
@@ -60,7 +64,7 @@
 
     - name: Parse install result
       ansible.builtin.set_fact:
-        parsed: "{{ deploy_result.stdout | from_json }}"
+        parsed: "{{ (deploy_result.stdout | default('{}')) | from_json }}"
 
     - name: Surface result back to FastAPI
       ansible.builtin.set_fact:
