@@ -20,6 +20,9 @@ artifacts/
 # pytest cache
 .pytest_cache/
 
+# SSH keypair for key-based host authentication
+.ssh/
+
 # Large binary files (exceed GitHub 100 MB limit)
 ansible/playbooks/msu/*.msu
 ansible/playbooks/wsusscn2.cab

@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.auth.crypto import encrypt_value
 from app.auth.dependencies import get_current_user
+from app.auth.ssh_keys import get_public_key
 from app.database import get_db
 from app.models.models import (
     Administrator,
@@ -92,9 +94,9 @@ def create_host(host_in: HostCreate, db: Session = Depends(get_db)):
         os_type=_map_os_type(host_in.os_type),
         api_key_hash=hashlib.sha256(api_key.encode()).hexdigest(),
         winrm_user=host_in.winrm_user,
-        winrm_password=host_in.winrm_password,
+        winrm_password=encrypt_value(host_in.winrm_password) if host_in.winrm_password else None,
         ssh_user=host_in.ssh_user,
-        ssh_password=host_in.ssh_password,
+        ssh_password=encrypt_value(host_in.ssh_password) if host_in.ssh_password else None,
     )
     db.add(host)
     db.commit()
@@ -107,6 +109,11 @@ def create_host(host_in: HostCreate, db: Session = Depends(get_db)):
 def list_hosts(db: Session = Depends(get_db)):
     hosts = db.query(Host).all()
     return [_to_host_response(host) for host in hosts]
+
+
+@router.get("/ssh-public-key")
+def get_ssh_public_key():
+    return {"public_key": get_public_key()}
 
 
 @router.get("/{host_id}", response_model=HostResponse)
@@ -165,11 +172,11 @@ def update_host(
     if host_in.winrm_user is not None:
         host.winrm_user = host_in.winrm_user
     if host_in.winrm_password is not None:
-        host.winrm_password = host_in.winrm_password
+        host.winrm_password = encrypt_value(host_in.winrm_password) if host_in.winrm_password else None
     if host_in.ssh_user is not None:
         host.ssh_user = host_in.ssh_user
     if host_in.ssh_password is not None:
-        host.ssh_password = host_in.ssh_password
+        host.ssh_password = encrypt_value(host_in.ssh_password) if host_in.ssh_password else None
 
     db.commit()
     db.refresh(host)

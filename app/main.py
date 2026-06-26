@@ -8,6 +8,7 @@ from slowapi.errors import RateLimitExceeded
 from sqlalchemy.orm import Session
 
 from app.auth.password import hash_password
+from app.auth.ssh_keys import ensure_ssh_keypair
 from app.database import Base, engine, SessionLocal
 from app.models import models
 from app.models.models import Administrator, UserRole
@@ -78,6 +79,7 @@ app.include_router(settings_router.router)
 
 @app.on_event("startup")
 def on_startup():
+    ensure_ssh_keypair()
     start_scheduler()
 
 

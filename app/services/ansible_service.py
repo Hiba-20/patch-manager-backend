@@ -8,6 +8,8 @@ from typing import Any
 
 import ansible_runner
 
+from app.auth.crypto import decrypt_value
+from app.auth.ssh_keys import PRIVATE_KEY_PATH
 from app.models.models import Host
 from app.services.scan_parser import flatten_win_updates_result
 
@@ -34,12 +36,12 @@ def _build_host_inventory(host: Host | None) -> str | None:
 
     if is_windows:
         winrm_user = host.winrm_user or os.getenv("WINRM_USER") or ""
-        winrm_password = host.winrm_password or os.getenv("WINRM_PASSWORD") or ""
-        if winrm_user and winrm_password:
+        winrm_pass = decrypt_value(host.winrm_password) if host.winrm_password else os.getenv("WINRM_PASSWORD", "")
+        if winrm_user and winrm_pass:
             return (
                 f"[windows]\n"
                 f"{host.hostname} ansible_host={ansible_host} "
-                f"ansible_user={winrm_user} ansible_password={winrm_password}\n"
+                f"ansible_user={winrm_user} ansible_password={winrm_pass}\n"
                 f"[windows:vars]\n"
                 f"ansible_connection=winrm\n"
                 f"ansible_port=5985\n"
@@ -50,18 +52,28 @@ def _build_host_inventory(host: Host | None) -> str | None:
                 f"ansible_winrm_read_timeout_sec=120\n"
                 f"ansible_become_method=runas\n"
                 f"ansible_become_user=SYSTEM\n"
-                f"ansible_become_password={winrm_password}\n"
+                f"ansible_become_password={winrm_pass}\n"
             )
     else:
         ssh_user = host.ssh_user or os.getenv("SSH_USER") or "root"
-        ssh_password = host.ssh_password or os.getenv("SSH_PASSWORD") or ""
-        ssh_key_path = os.getenv("SSH_KEY_PATH", "")
-        extra_vars = f"ansible_user={ssh_user}"
-        if ssh_password:
-            extra_vars += f" ansible_password={ssh_password}"
-            extra_vars += f" ansible_become_password={ssh_password}"
-        if ssh_key_path:
-            extra_vars += f" ansible_ssh_private_key_file={ssh_key_path}"
+        ssh_pass = decrypt_value(host.ssh_password) if host.ssh_password else ""
+
+        if PRIVATE_KEY_PATH.exists():
+            extra_vars = (
+                f"ansible_user={ssh_user} "
+                f"ansible_ssh_private_key_file={PRIVATE_KEY_PATH} "
+                f"ansible_ssh_common_args='-o StrictHostKeyChecking=no -o PasswordAuthentication=no' "
+                f"ansible_become=yes ansible_become_method=sudo"
+            )
+        else:
+            extra_vars = f"ansible_user={ssh_user}"
+            if ssh_pass:
+                extra_vars += f" ansible_password={ssh_pass}"
+                extra_vars += f" ansible_become_password={ssh_pass}"
+            extra_vars += (
+                f" ansible_ssh_common_args='-o StrictHostKeyChecking=no' "
+                f"ansible_become=yes ansible_become_method=sudo"
+            )
         return (
             f"[linux]\n"
             f"{host.hostname} ansible_host={ansible_host} "
