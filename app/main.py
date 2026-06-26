@@ -11,7 +11,7 @@ from app.auth.password import hash_password
 from app.database import Base, engine, SessionLocal
 from app.models import models
 from app.models.models import Administrator, UserRole
-from app.routers import audit_logs, auth, dashboard, groups, hosts, invites, patches, scans
+from app.routers import audit_logs, auth, dashboard, groups, hosts, invites, patches, scans, reports, settings as settings_router
 from app.services.scheduler import start_scheduler, stop_scheduler
 
 Base.metadata.create_all(bind=engine)
@@ -72,6 +72,8 @@ app.include_router(groups.router)
 app.include_router(audit_logs.router)
 app.include_router(dashboard.router)
 app.include_router(invites.router)
+app.include_router(reports.router)
+app.include_router(settings_router.router)
 
 
 @app.on_event("startup")

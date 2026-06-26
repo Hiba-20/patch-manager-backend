@@ -68,6 +68,10 @@ def _to_host_response(host: Host) -> HostResponse:
         os_type=os_type,
         status="active" if host.is_active else "inactive",
         created_at=host.registered_at,
+        winrm_user=host.winrm_user,
+        winrm_password=host.winrm_password,
+        ssh_user=host.ssh_user,
+        ssh_password=host.ssh_password,
     )
 
 
@@ -87,6 +91,10 @@ def create_host(host_in: HostCreate, db: Session = Depends(get_db)):
         ip_address=host_in.ip_address,
         os_type=_map_os_type(host_in.os_type),
         api_key_hash=hashlib.sha256(api_key.encode()).hexdigest(),
+        winrm_user=host_in.winrm_user,
+        winrm_password=host_in.winrm_password,
+        ssh_user=host_in.ssh_user,
+        ssh_password=host_in.ssh_password,
     )
     db.add(host)
     db.commit()
@@ -154,6 +162,14 @@ def update_host(
         host.ip_address = host_in.ip_address
     if host_in.os_type is not None:
         host.os_type = _map_os_type(host_in.os_type)
+    if host_in.winrm_user is not None:
+        host.winrm_user = host_in.winrm_user
+    if host_in.winrm_password is not None:
+        host.winrm_password = host_in.winrm_password
+    if host_in.ssh_user is not None:
+        host.ssh_user = host_in.ssh_user
+    if host_in.ssh_password is not None:
+        host.ssh_password = host_in.ssh_password
 
     db.commit()
     db.refresh(host)
@@ -262,7 +278,7 @@ def get_missing_updates(host_id: str, db: Session = Depends(get_db)):
         )
 
     os_str = host.os_type.value.lower()
-    result = run_online_scan(str(host.id), os_type=os_str)
+    result = run_online_scan(str(host.id), os_type=os_str, host=host)
     if result["rc"] != 0:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -325,7 +341,7 @@ def get_fast_updates(host_id: str, db: Session = Depends(get_db)):
         raw_updates = host.cached_scan_result.get("available_updates", []) or []
         cached_at = host.cached_scan_at
     else:
-        result = run_online_scan(str(host.id), os_type=os_str)
+        result = run_online_scan(str(host.id), os_type=os_str, host=host)
         if result["rc"] != 0:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -380,7 +396,7 @@ def scan_online(
         )
 
     os_str = host.os_type.value.lower()
-    result = run_online_scan(str(host.id), os_type=os_str)
+    result = run_online_scan(str(host.id), os_type=os_str, host=host)
     if result["rc"] != 0:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -470,8 +486,8 @@ def deploy_patch(
         id=uuid.uuid4(),
         patch_id=patch.id,
         host_id=host.id,
-        approved_by=current_user.id,
-        status=PatchStatus.IN_PROGRESS if not req.scheduled_at else PatchStatus.APPROVED,
+        approved_by=current_user.id if not req.scheduled_at else None,
+        status=PatchStatus.IN_PROGRESS if not req.scheduled_at else PatchStatus.PENDING,
         scheduled_at=scheduled_at,
         started_at=datetime.utcnow() if not req.scheduled_at else None,
     )
@@ -491,7 +507,7 @@ def deploy_patch(
             details=f"Scheduled for {req.scheduled_at.isoformat()}",
         )
 
-    ansible_result = run_online_deploy(str(host.id), req.kb_id, req.auto_reboot, os_type=os_str)
+    ansible_result = run_online_deploy(str(host.id), req.kb_id, req.auto_reboot, os_type=os_str, host=host)
 
     dep.finished_at = datetime.utcnow()
     dep.status = (

@@ -8,6 +8,7 @@ class PatchCreate(BaseModel):
     vendor: str | None = None
     os_type: str = "LINUX_DEBIAN"
     severity: str = "Medium"
+    classification: str | None = None
     cve_references: list[str] | None = None
     ansible_playbook: str | None = None
 
@@ -19,6 +20,7 @@ class PatchResponse(BaseModel):
     vendor: str | None
     os_type: str
     severity: str | None
+    classification: str | None = None
     cve_references: list[str] | None
     created_at: datetime
 
@@ -53,3 +55,20 @@ class DeploymentResponse(BaseModel):
         if v is not None and v.tzinfo is None:
             return v.replace(tzinfo=timezone.utc)
         return v
+
+
+class ApprovalLogResponse(BaseModel):
+    id: str
+    deployment_id: str
+    admin_id: str
+    admin_name: str = ""
+    action: str
+    comment: str | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BulkDeploymentRequest(BaseModel):
+    deployment_ids: list[str]
+    comment: str | None = None

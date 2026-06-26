@@ -31,7 +31,7 @@ def scheduled_scan_all_hosts():
                 is_linux = os_str.startswith("linux")
                 host_limit = None if is_linux else host.hostname
 
-                result = run_online_scan(str(host.id), host_limit=host_limit, os_type=os_str)
+                result = run_online_scan(str(host.id), host_limit=host_limit, os_type=os_str, host=host)
                 if result["rc"] != 0:
                     logger.error(
                         "[scheduler] scan failed for %s: rc=%s",
@@ -88,7 +88,7 @@ def execute_scheduled_deployments():
             db.commit()
 
             ansible_result = run_online_deploy(
-                str(host.id), dep.patch.name, False, os_type=os_str,
+                str(host.id), dep.patch.name, False, os_type=os_str, host=host,
             )
 
             dep.finished_at = datetime.utcnow()

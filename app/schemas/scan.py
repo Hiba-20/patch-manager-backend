@@ -39,3 +39,15 @@ class LatestScanResponse(BaseModel):
     execution_log: Any
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ScanHistoryItem(BaseModel):
+    id: str
+    status: str
+    started_at: datetime | None
+    finished_at: datetime | None
+    duration_seconds: int = 0
+    patch_count: int = 0
+    hostname: str = ""
+
+    model_config = ConfigDict(from_attributes=True)
