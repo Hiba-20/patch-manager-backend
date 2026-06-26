@@ -1,0 +1,98 @@
+---
+- name: Deploy a specific Windows patch (offline via wsusscn2.cab)
+  hosts: windows
+  gather_facts: yes
+  vars:
+    kb_id: ""
+    ansible_winrm_operation_timeout_sec: 30
+    ansible_winrm_read_timeout_sec: 360
+  tasks:
+    - name: Validate kb_id input
+      assert:
+        that:
+          - kb_id is match('^KB\\d{6,7}$')
+        fail_msg: "Invalid KB ID format: {{ kb_id }}. Must match KB followed by 6-7 digits."
+
+    - name: Display deployment target
+      debug:
+        msg: "Installing {{ kb_id }} on {{ ansible_hostname }}"
+
+    - name: Copy WSUS offline catalog to VM
+      ansible.windows.win_copy:
+        src: "{{ playbook_dir }}/wsusscn2.cab"
+        dest: C:\Windows\Temp\wsusscn2.cab
+
+    - name: Copy offline deploy script to VM
+      ansible.windows.win_copy:
+        src: "{{ playbook_dir }}/deploy_offline.ps1"
+        dest: C:\Windows\Temp\deploy_offline.ps1
+
+    - name: Clean up old result files
+      ansible.windows.win_shell: |
+        Remove-Item C:\Windows\Temp\deploy_result_*.json -Force -ErrorAction SilentlyContinue
+
+    - name: Create SYSTEM scheduled task for offline deploy
+      ansible.windows.win_shell: |
+        $taskName = "ExiaDeployTask"
+        schtasks /Delete /TN "$taskName" /F 2>$null
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File C:\Windows\Temp\deploy_offline.ps1 {{ kb_id }}"
+        $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+        $principal = New-ScheduledTaskPrincipal -UserId SYSTEM -LogonType ServiceAccount -RunLevel Highest
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force
+        Start-ScheduledTask -TaskName $taskName
+
+    - name: Wait for deploy result file
+      ansible.windows.win_find:
+        paths: C:\Windows\Temp
+        patterns: deploy_result_*.json
+      register: find_result
+      until: find_result.files | length > 0
+      retries: 90
+      delay: 10
+      ignore_errors: yes
+
+    - name: Clean up scheduled task
+      ansible.windows.win_shell: |
+        schtasks /Delete /TN "ExiaDeployTask" /F 2>$null
+
+    - name: Check if result files exist
+      ansible.windows.win_find:
+        paths: C:\Windows\Temp
+        patterns: deploy_result_*.json
+      register: file_check
+
+    - name: Read deploy result file
+      ansible.windows.win_shell: |
+        $latest = Get-ChildItem C:\Windows\Temp\deploy_result_*.json | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        Get-Content $latest.FullName -Raw
+        Remove-Item $latest.FullName -Force
+      register: deploy_output
+      when: file_check.files | length > 0
+
+    - name: Parse deploy result
+      set_fact:
+        deploy_result: "{{ (deploy_output.stdout | from_json) }}"
+      when: file_check.files | length > 0
+
+    - name: Create fallback deploy result
+      set_fact:
+        deploy_result:
+          hostname: "{{ ansible_hostname }}"
+          kb_id: "{{ kb_id }}"
+          installed: false
+          reboot_required: false
+          found_count: 0
+          installed_count: 0
+          failed_count: 1
+          details: "No result file from SYSTEM task"
+      when: file_check.files | length == 0
+
+    - name: Reboot if required
+      ansible.windows.win_reboot:
+        reboot_timeout: 600
+      when: deploy_result.reboot_required
+
+    - name: Return deployment result
+      debug:
+        var: deploy_result

@@ -1,0 +1,42 @@
+---
+- name: Deploy a specific Windows patch
+  hosts: windows
+  gather_facts: yes
+  vars:
+    kb_id: ""
+  tasks:
+    - name: Validate kb_id input
+      assert:
+        that:
+          - kb_id is match('^KB\\d{6,7}$')
+        fail_msg: "Invalid KB ID format: {{ kb_id }}. Must match KB followed by 6-7 digits."
+      ignore_errors: no
+
+    - name: Display deployment target
+      debug:
+        msg: "Installing {{ kb_id }} on {{ ansible_hostname }}"
+
+    - name: Install the specified update
+      win_updates:
+        whitelist: "{{ kb_id }}"
+        state: installed
+        reboot: yes
+        reboot_timeout: 600
+      register: install_result
+      ignore_errors: yes
+
+    - name: Build deployment result
+      set_fact:
+        deploy_result:
+          hostname: "{{ ansible_hostname | default('') }}"
+          kb_id: "{{ kb_id }}"
+          installed: "{{ install_result is success and install_result.installed_update_count | default(0) > 0 }}"
+          reboot_required: "{{ install_result.reboot_required | default(false) }}"
+          found_count: "{{ install_result.found_update_count | default(0) }}"
+          installed_count: "{{ install_result.installed_update_count | default(0) }}"
+          failed_count: "{{ install_result.failed_update_count | default(0) }}"
+          details: "{{ install_result | to_json }}"
+
+    - name: Return deployment result
+      debug:
+        var: deploy_result

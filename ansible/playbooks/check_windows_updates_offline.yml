@@ -1,0 +1,82 @@
+---
+- name: Check available Windows updates (offline via wsusscn2.cab)
+  hosts: windows
+  gather_facts: yes
+  vars:
+    ansible_winrm_operation_timeout_sec: 30
+    ansible_winrm_read_timeout_sec: 360
+  tasks:
+    - name: Copy WSUS offline catalog to VM
+      ansible.windows.win_copy:
+        src: "{{ playbook_dir }}/wsusscn2.cab"
+        dest: C:\Windows\Temp\wsusscn2.cab
+
+    - name: Copy offline scan script to VM
+      ansible.windows.win_copy:
+        src: "{{ playbook_dir }}/scan_offline.ps1"
+        dest: C:\Windows\Temp\scan_offline.ps1
+
+    - name: Clean up old result files
+      ansible.windows.win_shell: |
+        Remove-Item C:\Windows\Temp\scan_result_*.json -Force -ErrorAction SilentlyContinue
+
+    - name: Create SYSTEM scheduled task for offline scan
+      ansible.windows.win_shell: |
+        $taskName = "ExiaOfflineScan"
+        schtasks /Delete /TN "$taskName" /F 2>$null
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File C:\Windows\Temp\scan_offline.ps1"
+        $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+        $principal = New-ScheduledTaskPrincipal -UserId SYSTEM -LogonType ServiceAccount -RunLevel Highest
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force
+        Start-ScheduledTask -TaskName $taskName
+
+    - name: Wait for scan result file
+      ansible.windows.win_find:
+        paths: C:\Windows\Temp
+        patterns: scan_result_*.json
+      register: find_result
+      until: find_result.files | length > 0
+      retries: 60
+      delay: 10
+      ignore_errors: yes
+
+    - name: Clean up scheduled task
+      ansible.windows.win_shell: |
+        schtasks /Delete /TN "ExiaOfflineScan" /F 2>$null
+
+    - name: Check if result files exist
+      ansible.windows.win_find:
+        paths: C:\Windows\Temp
+        patterns: scan_result_*.json
+      register: file_check
+
+    - name: Read scan result file
+      ansible.windows.win_shell: |
+        $latest = Get-ChildItem C:\Windows\Temp\scan_result_*.json | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        $content = Get-Content $latest.FullName -Raw
+        $parsed = $content | ConvertFrom-Json -ErrorAction SilentlyContinue
+        if ($parsed -and $parsed.error) {
+          Write-Output "ERROR: $($parsed.error)"
+          exit 1
+        }
+        Write-Output $content
+        Remove-Item $latest.FullName -Force
+      register: scan_output
+      when: file_check.files | length > 0
+
+    - name: Create fallback result
+      set_fact:
+        update_data:
+          hostname: "{{ ansible_hostname }}"
+          available_updates: []
+      when: file_check.files | length == 0
+
+    - name: Parse scan result
+      set_fact:
+        update_data: "{{ (scan_output.stdout | from_json) }}"
+      when: file_check.files | length > 0
+
+    - name: Return update data
+      debug:
+        var: update_data

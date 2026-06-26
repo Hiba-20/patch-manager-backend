@@ -1,0 +1,77 @@
+---
+# deploy_windows_patch_online.yml
+#
+# Installs ONE specific KB by article ID, downloaded directly from
+# Microsoft Update. Replaces deploy_windows_patch_msu.yml (copy .msu →
+# expand.exe → dism.exe).
+#
+# IMPORTANT ARCHITECTURE NOTE:
+# ansible.windows.win_updates has NO per-KB filter parameter — only
+# category_names. It's built for "patch everything in category X",
+# not "install exactly KB5066747". Your UI has a per-KB Deploy button
+# per row, so win_updates is the wrong tool for this step.
+#
+# Instead this playbook drives the PSWindowsUpdate PowerShell module,
+# whose Install-WindowsUpdate cmdlet DOES accept -KBArticleID. Use
+# win_updates only for the scan step; use this for targeted deploys.
+
+- name: Deploy a single Windows KB by article ID (online)
+  hosts: windows
+  gather_facts: no
+  vars:
+    target_kb: "{{ kb_id }}"   # bare number e.g. "5066747" — KB prefix stripped by service
+
+  tasks:
+    - name: Ensure PSWindowsUpdate module is present (idempotent, no-ops after first run)
+      ansible.windows.win_shell: |
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        if (-not (Get-Module -ListAvailable PSWindowsUpdate)) {
+          Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
+          Install-Module PSWindowsUpdate -Force -AllowClobber -Scope AllUsers -SkipPublisherCheck
+        }
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
+
+    - name: Install the specified KB
+      ansible.windows.win_shell: |
+        Import-Module PSWindowsUpdate
+        $results = Install-WindowsUpdate -KBArticleID "{{ target_kb }}" -AcceptAll -IgnoreReboot -Verbose -Confirm:$false
+        $rebootReq = $false
+        $output = @()
+        foreach ($r in $results) {
+          $output += @{
+            Result = $r.Result
+            RebootRequired = $r.RebootRequired
+          }
+          if ($r.RebootRequired) { $rebootReq = $true }
+        }
+        $summary = @{
+          items = $output
+          reboot_required = $rebootReq
+          raw = ($results | ConvertTo-Json -Depth 2 -Compress)
+        }
+        $summary | ConvertTo-Json -Compress
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
+      register: deploy_result
+      failed_when: deploy_result.rc != 0
+
+    - name: Parse install result
+      ansible.builtin.set_fact:
+        parsed: "{{ deploy_result.stdout | from_json }}"
+
+    - name: Surface result back to FastAPI
+      ansible.builtin.set_fact:
+        deploy_output: "{{ parsed.raw | default('') }}"
+        reboot_required: "{{ parsed.reboot_required | default(false) }}"
+
+    - name: Reboot now, only if explicitly requested by the caller
+      ansible.windows.win_reboot:
+        reboot_timeout: 600
+        connect_timeout: 30
+        msg: "Rebooting to finish KB {{ target_kb }} installation"
+      when:
+        - reboot_required | bool
+        - auto_reboot | default(false) | bool

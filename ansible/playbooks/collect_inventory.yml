@@ -42,8 +42,8 @@
     - name: Get installed software
       win_shell: |
         Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* |
-        Select-Object DisplayName, DisplayVersion, Publisher |
-        Where-Object { $_.DisplayName -ne $null } |
+        Select-Object @{N='name';E={$_.DisplayName}}, @{N='version';E={$_.DisplayVersion}}, @{N='vendor';E={$_.Publisher}} |
+        Where-Object { $_.name -ne $null } |
         ConvertTo-Json -Compress
       register: win_software
       changed_when: false
@@ -67,11 +67,11 @@
           os_version: "{{ ansible_os_name }}"
           os_architecture: "{{ ansible_architecture }}"
           cpu_model: "{{ ansible_processor[0] | default('unknown') }}"
-          cpu_cores: "{{ ansible_processor_count }}"
+          cpu_cores: "{{ ansible_processor_vcpus }}"
           ram_total_gb: "{{ (ansible_memtotal_mb / 1024) | round(2) }}"
           ram_used_percent: "{{ (100 - (ansible_memfree_mb / ansible_memtotal_mb * 100)) | round(1) }}"
           disk_info: "{{ win_disk.stdout }}"
-          packages: "{{ win_software.stdout }}"
+          packages: "{{ (win_software.stdout | from_json) | default([]) }}"
 
     - name: Return inventory data
       debug:
