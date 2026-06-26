@@ -1,0 +1,67 @@
+---
+# deploy_linux_patch.yml
+#
+# Installs a single package or performs a full system upgrade on
+# Debian/Ubuntu hosts. Accepts `package_name` extra var:
+#   - Specific name (e.g. "libssl3") → `apt install -y <package>`
+#   - "ALL" → `apt upgrade -y`
+
+- name: Deploy Linux package update (Debian/Ubuntu)
+  hosts: linux
+  gather_facts: no
+  become: yes
+  vars:
+    target_pkg: "{{ package_name | default('') }}"
+
+  tasks:
+    - name: Update apt cache before install
+      ansible.builtin.apt:
+        update_cache: yes
+      register: cache_update_result
+      ignore_errors: yes
+      when: target_pkg != ""
+
+    - name: Upgrade all packages
+      ansible.builtin.apt:
+        upgrade: dist
+        autoremove: yes
+        autoclean: yes
+      register: upgrade_result
+      when: target_pkg | upper == "ALL"
+
+    - name: Install specific package
+      ansible.builtin.apt:
+        name: "{{ target_pkg }}"
+        state: latest
+        update_cache: no
+      register: install_result
+      when: target_pkg | upper != "ALL" and target_pkg != ""
+
+    - name: Determine if reboot is required
+      ansible.builtin.set_fact:
+        reboot_required: false
+
+    - name: Check if reboot is pending
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_file
+      when: target_pkg | upper == "ALL"
+
+    - name: Set reboot_required fact
+      ansible.builtin.set_fact:
+        reboot_required: true
+      when:
+        - reboot_file.stat is defined
+        - reboot_file.stat.exists
+
+    - name: Surface deploy result
+      ansible.builtin.set_fact:
+        deploy_result:
+          package: "{{ target_pkg if target_pkg | upper != 'ALL' else 'all' }}"
+          changed: "{{ (upgrade_result is defined and upgrade_result.changed) or (install_result is defined and install_result.changed) }}"
+          reboot_required: "{{ reboot_required }}"
+          message: "{{ (upgrade_result is defined and upgrade_result.changed) | ternary('System upgraded', '') + (install_result is defined and install_result.changed) | ternary('Package installed', '') | default('No changes needed') }}"
+
+    - name: Show result
+      ansible.builtin.debug:
+        var: deploy_result

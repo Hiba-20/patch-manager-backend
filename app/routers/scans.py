@@ -71,7 +71,10 @@ def create_scan(scan_in: ScanRequest, db: Session = Depends(get_db)):
     db.refresh(scan)
 
     if scan_status == ScanStatus.COMPLETED:
-        parse_inventory_data(scan, db)
+        try:
+            parse_inventory_data(scan, db)
+        except Exception:
+            pass
 
     return _to_scan_response(scan, scan_in.scan_type)
 

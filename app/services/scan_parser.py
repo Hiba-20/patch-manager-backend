@@ -149,27 +149,35 @@ def parse_inventory_data(scan: ScanResult, db: Session) -> None:
         }
 
         for pkg in packages_data:
-            pkg_name = (pkg.get("name") or "").strip()
+            if isinstance(pkg, str):
+                parts = pkg.split("|")
+                pkg_name = parts[0].strip() if parts else ""
+                pkg_version = parts[1].strip() if len(parts) > 1 else None
+                pkg_architecture = parts[2].strip() if len(parts) > 2 else None
+                parsed_date = None
+            else:
+                pkg_name = (pkg.get("name") or "").strip()
+                pkg_version = pkg.get("version")
+                pkg_vendor = pkg.get("vendor")
+                install_date_str = pkg.get("install_date")
+                parsed_date = None
+                if install_date_str:
+                    try:
+                        parsed_date = date.fromisoformat(install_date_str)
+                    except (ValueError, TypeError):
+                        pass
             if not pkg_name or pkg_name in existing_pkg_names:
                 continue
-
-            install_date_str = pkg.get("install_date")
-            parsed_date = None
-            if install_date_str:
-                try:
-                    parsed_date = date.fromisoformat(install_date_str)
-                except (ValueError, TypeError):
-                    pass
 
             sw = Software(
                 id=uuid.uuid4(),
                 host_id=scan.host_id,
                 scan_id=scan.id,
                 name=pkg_name,
-                version=pkg.get("version"),
-                vendor=pkg.get("vendor"),
+                version=pkg_version,
+                vendor=pkg_vendor if not isinstance(pkg, str) else None,
                 install_date=parsed_date,
-                package_manager=pkg.get("package_manager"),
+                package_manager=pkg_architecture if isinstance(pkg, str) else pkg.get("package_manager"),
             )
             db.add(sw)
             existing_pkg_names.add(pkg_name)

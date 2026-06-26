@@ -3,12 +3,11 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.models import Host, OSType
+from app.models.models import Host
 from app.schemas.dashboard import DashboardStatsResponse
 from app.schemas.update import DashboardMissingUpdate, DashboardMissingUpdatesResponse
 from datetime import datetime, timedelta
-from app.services.ansible_service import run_online_scan
-from app.services.scan_parser import flatten_win_updates_result
+from app.services.ansible_service import normalize_scan_result, run_online_scan
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -16,7 +15,7 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 @router.get("/stats", response_model=DashboardStatsResponse)
 def get_dashboard_stats(db: Session = Depends(get_db)):
     total = db.query(func.count(Host.id)).scalar() or 0
-    cutoff = datetime.utcnow() - timedelta(minutes=5)
+    cutoff = datetime.utcnow() - timedelta(hours=6)
     online = db.query(func.count(Host.id)).filter(Host.last_seen >= cutoff).scalar() or 0
     offline = total - online
 
@@ -37,8 +36,10 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
                 sev_map[s] += 1
                 if s in ("Critical", "High"):
                     has_issues = True
-            elif s:
+            else:
                 sev_map["Medium"] += 1
+                if s.lower() == "important":
+                    has_issues = True
         if has_issues:
             hosts_with_issues += 1
 
@@ -67,13 +68,15 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
 
 @router.get("/missing-updates", response_model=DashboardMissingUpdatesResponse)
 def get_dashboard_missing_updates(db: Session = Depends(get_db)):
-    windows_hosts = db.query(Host).filter(Host.os_type == OSType.WINDOWS).all()
+    hosts = db.query(Host).all()
     all_updates: list[DashboardMissingUpdate] = []
 
     now = datetime.utcnow()
     cache_hours = 24
-    for host in windows_hosts:
+    for host in hosts:
         try:
+            os_str = host.os_type.value.lower()
+
             if (
                 host.cached_scan_result
                 and host.cached_scan_at
@@ -81,11 +84,10 @@ def get_dashboard_missing_updates(db: Session = Depends(get_db)):
             ):
                 raw_updates = host.cached_scan_result.get("available_updates", []) or []
             else:
-                result = run_online_scan(str(host.id))
+                result = run_online_scan(str(host.id), os_type=os_str)
                 if result["rc"] != 0:
                     continue
-                raw = result.get("missing_updates", {}) or {}
-                raw_updates = flatten_win_updates_result(raw)
+                raw_updates = normalize_scan_result(result, os_str)
                 host.cached_scan_result = {"available_updates": raw_updates}
                 host.cached_scan_at = now
             for u in raw_updates:

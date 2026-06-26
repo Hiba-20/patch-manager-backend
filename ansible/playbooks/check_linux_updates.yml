@@ -1,0 +1,32 @@
+---
+# check_linux_updates.yml
+#
+# Scans Debian/Ubuntu hosts for available package updates using
+# `apt list --upgradable`. Parses output via Python3 for portability
+# (no jq dependency). Compatible with the system's update pipeline.
+
+- name: Scan for available Linux package updates (Debian/Ubuntu)
+  hosts: linux
+  gather_facts: no
+
+  tasks:
+    - name: Query apt for upgradable packages
+      ansible.builtin.shell: |
+        apt list --upgradable 2>/dev/null | tail -n +2
+      register: apt_raw
+      changed_when: false
+      args:
+        executable: /bin/bash
+
+    - name: Parse upgrade list into structured JSON
+      ansible.builtin.set_fact:
+        upgradable_packages: >-
+          {{ apt_raw.stdout_lines
+             | map('regex_replace', '^(?P<pkg>[^/]+)/(?P<repo>\S+)\s+(?P<avail>\S+)\s+\S+\s+\[upgradable from:\s+(?P<inst>\S+).*$',
+                   '{"package": "\g<pkg>", "repo": "\g<repo>", "available_version": "\g<avail>", "installed_version": "\g<inst>"}')
+             | map('from_json')
+             | list }}
+
+    - name: Show summary
+      ansible.builtin.debug:
+        msg: "Found {{ upgradable_packages | length }} upgradable package(s)"

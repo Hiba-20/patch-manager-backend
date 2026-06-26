@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -150,12 +150,18 @@ def create_deployment(
     if not host:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Host not found")
 
+    raw_scheduled = dep_in.scheduled_at
+    if raw_scheduled:
+        if raw_scheduled.tzinfo:
+            raw_scheduled = raw_scheduled.astimezone(timezone.utc).replace(tzinfo=None)
+    scheduled_at = raw_scheduled or datetime.utcnow()
+
     dep = PatchDeployment(
         id=uuid.uuid4(),
         patch_id=patch_uuid,
         host_id=host_uuid,
         status=PatchStatus.PENDING,
-        scheduled_at=dep_in.scheduled_at or datetime.utcnow(),
+        scheduled_at=scheduled_at,
     )
     db.add(dep)
     db.commit()
@@ -277,7 +283,7 @@ def cancel_deployment(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid deployment_id")
     if not dep:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
-    if dep.status not in (PatchStatus.PENDING, PatchStatus.APPROVED):
+    if dep.status not in (PatchStatus.PENDING, PatchStatus.APPROVED, PatchStatus.IN_PROGRESS):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Cannot cancel deployment with status '{dep.status.value}'")
 
     dep.status = PatchStatus.CANCELLED

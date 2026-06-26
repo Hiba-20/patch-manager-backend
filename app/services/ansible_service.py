@@ -1,3 +1,4 @@
+import multiprocessing
 import os
 import platform
 import uuid
@@ -6,13 +7,19 @@ from typing import Any
 
 import ansible_runner
 
+from app.services.scan_parser import flatten_win_updates_result
+
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 INVENTORY_PLAYBOOK = BASE_DIR / "ansible/playbooks/collect_inventory.yml"
 CHECK_UPDATES_PLAYBOOK = BASE_DIR / "ansible/playbooks/check_windows_updates_offline.yml"
 CHECK_UPDATES_ONLINE_PLAYBOOK = BASE_DIR / "ansible/playbooks/check_windows_updates_online.yml"
+CHECK_LINUX_UPDATES_PLAYBOOK = BASE_DIR / "ansible/playbooks/check_linux_updates.yml"
+CHECK_LINUX_RHEL_UPDATES_PLAYBOOK = BASE_DIR / "ansible/playbooks/check_linux_updates_rhel.yml"
 DEPLOY_PATCH_PLAYBOOK = BASE_DIR / "ansible/playbooks/deploy_windows_patch_offline.yml"
 MSU_DEPLOY_PLAYBOOK = BASE_DIR / "ansible/playbooks/deploy_windows_patch_msu.yml"
 ONLINE_DEPLOY_PLAYBOOK = BASE_DIR / "ansible/playbooks/deploy_windows_patch_online.yml"
+DEPLOY_LINUX_PATCH_PLAYBOOK = BASE_DIR / "ansible/playbooks/deploy_linux_patch.yml"
+DEPLOY_LINUX_RHEL_PATCH_PLAYBOOK = BASE_DIR / "ansible/playbooks/deploy_linux_patch_rhel.yml"
 GET_HOTFIX_PLAYBOOK = BASE_DIR / "ansible/playbooks/get_hotfix.yml"
 INVENTORY = BASE_DIR / "ansible/inventory/hosts.ini"
 
@@ -24,6 +31,35 @@ def _resolve_limit(os_type: str) -> str:
     if normalized == "windows":
         return "windows"
     raise ValueError(f"Unsupported os_type: {os_type}")
+
+
+def _is_debian_like(os_type: str) -> bool:
+    return os_type.lower() in ("linux_debian", "linux")
+
+
+def _is_rhel_like(os_type: str) -> bool:
+    return os_type.lower() in ("linux_rhel",)
+
+
+def _is_linux(os_type: str) -> bool:
+    return os_type.lower() in ("linux", "linux_debian", "linux_rhel", "linux_other")
+
+
+def normalize_scan_result(result: dict, os_type: str) -> list[dict]:
+    if os_type.lower().startswith("linux"):
+        raw = result.get("upgradable_packages", []) or []
+        return [
+            {
+                "kb_id": pkg["package"],
+                "title": f"{pkg.get('available_version', '')} (installed: {pkg.get('installed_version', '')})",
+                "severity": "Important",
+                "categories": ["Linux"],
+                "installed": False,
+            }
+            for pkg in raw
+        ]
+    raw = result.get("missing_updates", {}) or {}
+    return flatten_win_updates_result(raw)
 
 
 def _collect_events(runner: ansible_runner.Runner) -> list[dict[str, Any]]:
@@ -71,25 +107,41 @@ def _run_playbook(
     limit: str,
     ident: str,
     extra_vars: dict[str, Any] | None = None,
+    timeout_seconds: int = 600,
 ) -> dict[str, Any]:
     if platform.system() == "Darwin":
         os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
 
-    runner = ansible_runner.run(
-        private_data_dir=str(BASE_DIR),
-        playbook=str(playbook),
-        inventory=str(INVENTORY),
-        limit=limit,
-        ident=ident,
-        extravars=extra_vars or {},
-    )
+    result_queue: multiprocessing.Queue = multiprocessing.Queue()
 
-    events = _collect_events(runner)
-    return {
-        "status": runner.status,
-        "rc": runner.rc,
-        "events": events,
-    }
+    def _target():
+        runner = ansible_runner.run(
+            private_data_dir=str(BASE_DIR),
+            playbook=str(playbook),
+            inventory=str(INVENTORY),
+            limit=limit,
+            ident=ident,
+            extravars=extra_vars or {},
+        )
+        events = _collect_events(runner)
+        result_queue.put({
+            "status": runner.status,
+            "rc": runner.rc,
+            "events": events,
+        })
+
+    process = multiprocessing.Process(target=_target, daemon=True)
+    process.start()
+    process.join(timeout_seconds)
+
+    if process.is_alive():
+        process.terminate()
+        process.join(5)
+        if process.is_alive():
+            process.kill()
+        return {"status": "timeout", "rc": -1, "events": []}
+
+    return result_queue.get_nowait()
 
 
 def run_inventory_playbook(host_id: str, os_type: str) -> dict[str, Any]:
@@ -115,7 +167,42 @@ def run_update_check(host_id: str) -> dict[str, Any]:
     return result
 
 
-def run_online_scan(host_id: str, host_limit: str | None = None) -> dict[str, Any]:
+def run_linux_scan(host_id: str, os_type: str) -> dict[str, Any]:
+    playbook = CHECK_LINUX_UPDATES_PLAYBOOK if _is_debian_like(os_type) else CHECK_LINUX_RHEL_UPDATES_PLAYBOOK
+    result = _run_playbook(
+        playbook,
+        "linux",
+        f"linux-scan-{host_id}-{uuid.uuid4().hex[:8]}",
+    )
+    upgradable = _extract_ansible_fact(
+        result["events"], "upgradable_packages"
+    )
+    result["upgradable_packages"] = upgradable or []
+    return result
+
+
+def run_linux_deploy(host_id: str, package_name: str, os_type: str) -> dict[str, Any]:
+    playbook = DEPLOY_LINUX_PATCH_PLAYBOOK if _is_debian_like(os_type) else DEPLOY_LINUX_RHEL_PATCH_PLAYBOOK
+    result = _run_playbook(
+        playbook,
+        "linux",
+        f"linux-deploy-{host_id}-{uuid.uuid4().hex[:8]}",
+        extra_vars={"package_name": package_name},
+    )
+    deploy_result = _extract_ansible_fact(
+        result["events"], "deploy_result"
+    )
+    result["deploy_result"] = deploy_result
+    reboot_required = _extract_ansible_fact(
+        result["events"], "reboot_required"
+    )
+    result["reboot_required"] = reboot_required or False
+    return result
+
+
+def run_online_scan(host_id: str, host_limit: str | None = None, os_type: str | None = None) -> dict[str, Any]:
+    if os_type and _is_linux(os_type):
+        return run_linux_scan(host_id, os_type)
     limit = host_limit or "windows"
     result = _run_playbook(
         CHECK_UPDATES_ONLINE_PLAYBOOK,
@@ -129,7 +216,9 @@ def run_online_scan(host_id: str, host_limit: str | None = None) -> dict[str, An
     return result
 
 
-def run_online_deploy(host_id: str, kb_id: str, auto_reboot: bool = False) -> dict[str, Any]:
+def run_online_deploy(host_id: str, kb_id: str, auto_reboot: bool = False, os_type: str | None = None) -> dict[str, Any]:
+    if os_type and _is_linux(os_type):
+        return run_linux_deploy(host_id, kb_id, os_type)
     bare_kb = kb_id.replace("KB", "").replace("kb", "")
     result = _run_playbook(
         ONLINE_DEPLOY_PLAYBOOK,

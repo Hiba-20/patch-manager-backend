@@ -1,0 +1,62 @@
+---
+# deploy_linux_patch_rhel.yml
+#
+# Installs a single package or performs a full system upgrade on
+# RHEL/CentOS/Fedora hosts. Accepts `package_name` extra var:
+#   - Specific name (e.g. "openssl") → `dnf install -y <package>`
+#   - "ALL" → `dnf upgrade -y`
+
+- name: Deploy Linux package update (RHEL/CentOS/Fedora)
+  hosts: linux
+  gather_facts: no
+  become: yes
+  vars:
+    target_pkg: "{{ package_name | default('') }}"
+
+  tasks:
+    - name: Upgrade all packages
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_cache: yes
+      register: upgrade_result
+      when: target_pkg | upper == "ALL"
+
+    - name: Install specific package
+      ansible.builtin.dnf:
+        name: "{{ target_pkg }}"
+        state: latest
+        update_cache: yes
+      register: install_result
+      when: target_pkg | upper != "ALL" and target_pkg != ""
+
+    - name: Check if reboot is required
+      ansible.builtin.set_fact:
+        reboot_required: false
+
+    - name: Check for pending reboot
+      ansible.builtin.shell: |
+        if [ -f /var/run/reboot-required ]; then echo "yes"; else echo "no"; fi
+      register: reboot_check
+      changed_when: false
+      when: target_pkg | upper == "ALL"
+
+    - name: Set reboot_required fact
+      ansible.builtin.set_fact:
+        reboot_required: true
+      when:
+        - reboot_check is defined
+        - reboot_check.stdout is defined
+        - reboot_check.stdout.strip() == "yes"
+
+    - name: Surface deploy result
+      ansible.builtin.set_fact:
+        deploy_result:
+          package: "{{ target_pkg if target_pkg | upper != 'ALL' else 'all' }}"
+          changed: "{{ (upgrade_result is defined and upgrade_result.changed) or (install_result is defined and install_result.changed) }}"
+          reboot_required: "{{ reboot_required }}"
+          message: "{{ (upgrade_result is defined and upgrade_result.changed) | ternary('System upgraded', '') + (install_result is defined and install_result.changed) | ternary('Package installed', '') | default('No changes needed') }}"
+
+    - name: Show result
+      ansible.builtin.debug:
+        var: deploy_result
