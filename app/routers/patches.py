@@ -193,9 +193,136 @@ def approve_deployment(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid deployment_id")
     if not dep:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
+    if dep.status != PatchStatus.PENDING:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Cannot approve deployment with status '{dep.status.value}'")
+
+    dep.status = PatchStatus.APPROVED
+    dep.approved_by = current_user.id
+
+    host = db.query(Host).filter(Host.id == dep.host_id).first()
+    patch = db.query(Patch).filter(Patch.id == dep.patch_id).first()
+    db.commit()
+
+    return DeploymentResponse(
+        id=str(dep.id),
+        patch_id=str(dep.patch_id),
+        host_id=str(dep.host_id),
+        hostname=host.hostname if host else "unknown",
+        patch_name=patch.name if patch else "unknown",
+        severity=patch.severity if patch else None,
+        status=dep.status.value,
+        scheduled_at=dep.scheduled_at,
+        started_at=dep.started_at,
+        finished_at=dep.finished_at,
+        approved_by=str(dep.approved_by),
+        logs=dep.logs,
+    )
+
+
+@router.patch("/deployments/{deployment_id}/reject", response_model=DeploymentResponse)
+def reject_deployment(
+    deployment_id: str,
+    db: Session = Depends(get_db),
+    current_user: Administrator = Depends(get_current_user),
+):
+    try:
+        dep = (
+            db.query(PatchDeployment)
+            .filter(PatchDeployment.id == uuid.UUID(deployment_id))
+            .first()
+        )
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid deployment_id")
+    if not dep:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
+    if dep.status != PatchStatus.PENDING:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Cannot reject deployment with status '{dep.status.value}'")
+
+    dep.status = PatchStatus.REJECTED
+    dep.approved_by = current_user.id
+
+    host = db.query(Host).filter(Host.id == dep.host_id).first()
+    patch = db.query(Patch).filter(Patch.id == dep.patch_id).first()
+    db.commit()
+
+    return DeploymentResponse(
+        id=str(dep.id),
+        patch_id=str(dep.patch_id),
+        host_id=str(dep.host_id),
+        hostname=host.hostname if host else "unknown",
+        patch_name=patch.name if patch else "unknown",
+        severity=patch.severity if patch else None,
+        status=dep.status.value,
+        scheduled_at=dep.scheduled_at,
+        started_at=dep.started_at,
+        finished_at=dep.finished_at,
+        approved_by=str(dep.approved_by),
+        logs=dep.logs,
+    )
+
+
+@router.post("/deployments/{deployment_id}/cancel", response_model=DeploymentResponse)
+def cancel_deployment(
+    deployment_id: str,
+    db: Session = Depends(get_db),
+    current_user: Administrator = Depends(get_current_user),
+):
+    try:
+        dep = (
+            db.query(PatchDeployment)
+            .filter(PatchDeployment.id == uuid.UUID(deployment_id))
+            .first()
+        )
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid deployment_id")
+    if not dep:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
+    if dep.status not in (PatchStatus.PENDING, PatchStatus.APPROVED):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Cannot cancel deployment with status '{dep.status.value}'")
+
+    dep.status = PatchStatus.CANCELLED
+
+    host = db.query(Host).filter(Host.id == dep.host_id).first()
+    patch = db.query(Patch).filter(Patch.id == dep.patch_id).first()
+    db.commit()
+
+    return DeploymentResponse(
+        id=str(dep.id),
+        patch_id=str(dep.patch_id),
+        host_id=str(dep.host_id),
+        hostname=host.hostname if host else "unknown",
+        patch_name=patch.name if patch else "unknown",
+        severity=patch.severity if patch else None,
+        status=dep.status.value,
+        scheduled_at=dep.scheduled_at,
+        started_at=dep.started_at,
+        finished_at=dep.finished_at,
+        approved_by=str(dep.approved_by),
+        logs=dep.logs,
+    )
+
+
+@router.post("/deployments/{deployment_id}/retry", response_model=DeploymentResponse)
+def retry_deployment(
+    deployment_id: str,
+    db: Session = Depends(get_db),
+    current_user: Administrator = Depends(get_current_user),
+):
+    try:
+        dep = (
+            db.query(PatchDeployment)
+            .filter(PatchDeployment.id == uuid.UUID(deployment_id))
+            .first()
+        )
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid deployment_id")
+    if not dep:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
+    if dep.status != PatchStatus.FAILED:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Cannot retry deployment with status '{dep.status.value}'")
 
     dep.status = PatchStatus.PENDING
-    dep.approved_by = current_user.id
+    dep.logs = None
 
     host = db.query(Host).filter(Host.id == dep.host_id).first()
     patch = db.query(Patch).filter(Patch.id == dep.patch_id).first()

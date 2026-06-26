@@ -10,6 +10,12 @@ class HostCreate(BaseModel):
     os_type: Literal["linux", "windows"]
 
 
+class HostUpdate(BaseModel):
+    hostname: str | None = None
+    ip_address: str | None = None
+    os_type: Literal["linux", "windows"] | None = None
+
+
 class HardwareInfoResponse(BaseModel):
     cpu_model: str | None
     cpu_cores: int | None
@@ -30,6 +36,16 @@ class HostResponse(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class HostCreateResponse(BaseModel):
+    id: str
+    hostname: str
+    ip_address: str
+    os_type: str
+    status: str
+    created_at: datetime
+    api_key: str
 
 
 class SoftwareItem(BaseModel):

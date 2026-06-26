@@ -11,5 +11,6 @@ class DashboardStatsResponse(BaseModel):
     high_count: int = 0
     medium_count: int = 0
     low_count: int = 0
+    hosts_without_data: int = 0
 
     model_config = {"from_attributes": True}
