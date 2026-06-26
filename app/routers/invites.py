@@ -116,6 +116,32 @@ def list_invites(
     return [_to_invite_response(t, db) for t in tokens]
 
 
+@router.get("/{invite_id}", response_model=InviteResponse)
+def get_invite(
+    invite_id: str,
+    db: Session = Depends(get_db),
+    current_user: Administrator = Depends(get_current_user),
+):
+    try:
+        token = db.query(InviteToken).filter(InviteToken.id == uuid.UUID(invite_id)).first()
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid invite_id")
+    if not token:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found")
+    return _to_invite_response(token, db)
+
+
+@router.get("/code/{code}", response_model=InviteResponse)
+def get_invite_by_code(
+    code: str,
+    db: Session = Depends(get_db),
+):
+    token = db.query(InviteToken).filter(InviteToken.code == code).first()
+    if not token:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found")
+    return _to_invite_response(token, db)
+
+
 @router.delete("/{invite_id}", status_code=status.HTTP_204_NO_CONTENT)
 def revoke_invite(
     invite_id: str,

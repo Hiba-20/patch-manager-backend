@@ -8,7 +8,7 @@ load_dotenv()
 
 raw_url = os.getenv("DATABASE_URL", "postgresql://localhost/patch_manager")
 if "${" in raw_url:
-    DATABASE_URL = raw_url.format(
+    DATABASE_URL = raw_url.replace("${", "{").format(
         DB_USER=os.getenv("DB_USER", ""),
         DB_PASSWORD=os.getenv("DB_PASSWORD", ""),
         DB_HOST=os.getenv("DB_HOST", "localhost"),
