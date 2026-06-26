@@ -486,8 +486,8 @@ def deploy_patch(
         id=uuid.uuid4(),
         patch_id=patch.id,
         host_id=host.id,
-        approved_by=current_user.id,
-        status=PatchStatus.IN_PROGRESS if not req.scheduled_at else PatchStatus.APPROVED,
+        approved_by=current_user.id if not req.scheduled_at else None,
+        status=PatchStatus.IN_PROGRESS if not req.scheduled_at else PatchStatus.PENDING,
         scheduled_at=scheduled_at,
         started_at=datetime.utcnow() if not req.scheduled_at else None,
     )
